@@ -1,0 +1,66 @@
+//@version=5
+indicator("MT5 Trailing Stop Bridge", overlay=true, explicit_plot_zorder=true)
+
+// --- Inputs for custom parameters ---
+AtrCoef    = input.float(4.0, title="ATR Coefficient (Sensitivity)")
+AtrLen     = input.int(10, title="ATR Period")
+passphrase = input.string("gold_bridge_secret", title="Bridge Passphrase")
+symbolName = input.string("XAUUSD", title="Symbol Name for MT5")
+emaLen     = input.int(200, title="Baseline EMA Period")
+useEmaFilter = input.bool(true, title="Use EMA Baseline Filter")
+
+// --- ATR Calculation ---
+atr = ta.atr(AtrLen)
+loss = atr * AtrCoef
+
+// --- EMA Calculation ---
+baselineEma = ta.ema(close, emaLen)
+plot(useEmaFilter ? baselineEma : na, color=color.blue, title="Baseline EMA", linewidth=2)
+
+// --- Trailing Stop Series (Refactored to Series instead of Var) ---
+C1 = 0.0
+C1 := bar_index <= 1 ? close : na
+
+if bar_index > 1
+    C1_prev = nz(C1[1], close)
+    t1 = close > C1_prev ? close - loss : close + loss
+    t2 = close < C1_prev and close[1] < C1_prev ? math.min(C1_prev, close + loss) : t1
+    C1 := close > C1_prev and close[1] > C1_prev ? math.max(C1_prev, close - loss) : t2
+
+C1_prev_val = nz(C1[1], close)
+
+// --- Signal Conditions ---
+bullSignalRaw = close > C1 and close[1] <= C1_prev_val
+bearSignalRaw = close < C1 and close[1] >= C1_prev_val
+
+bullSignal = useEmaFilter ? (bullSignalRaw and close > baselineEma) : bullSignalRaw
+bearSignal = useEmaFilter ? (bearSignalRaw and close < baselineEma) : bearSignalRaw
+
+// --- State Tracking (Prevent Consecutive Same-Direction Signals) ---
+var int currentPos = 0 // 1 for Long, -1 for Short
+
+validBullSignal = bullSignal and currentPos != 1
+validBearSignal = bearSignal and currentPos != -1
+
+if validBullSignal
+    currentPos := 1
+if validBearSignal
+    currentPos := -1
+
+// --- Visual Chart Shapes ---
+plotshape(validBullSignal, title="BUY Signal", style=shape.labelup, location=location.belowbar, color=color.rgb(0, 200, 120), text="BUY", textcolor=color.white, size=size.small)
+plotshape(validBearSignal, title="SELL Signal", style=shape.labeldown, location=location.abovebar, color=color.rgb(255, 100, 120), text="SELL", textcolor=color.white, size=size.small)
+
+// --- Plot Trailing Stop Line ---
+plot(C1, title="Trailing Stop (C1)", color=close > C1 ? color.rgb(0, 200, 120) : color.rgb(255, 100, 120), linewidth=2, style=plot.style_stepline)
+
+// --- Webhook Payload Automation ---
+buyPayload  = '{"passphrase": "' + passphrase + '", "type": "BUY", "symbol": "' + symbolName + '", "price": ' + str.tostring(close) + '}'
+sellPayload = '{"passphrase": "' + passphrase + '", "type": "SELL", "symbol": "' + symbolName + '", "price": ' + str.tostring(close) + '}'
+
+// Trigger automated alerts on bar close
+if validBullSignal
+    alert(buyPayload, alert.freq_once_per_bar_close)
+
+if validBearSignal
+    alert(sellPayload, alert.freq_once_per_bar_close)

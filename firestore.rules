@@ -1,0 +1,40 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isSuperAdmin() {
+      return isSignedIn() && request.auth.token.email == "gowdarakshath17@gmail.com";
+    }
+
+    match /users/{userId} {
+      // User can read/write their own profile, or super admin can manage all
+      allow read, write: if (isSignedIn() && request.auth.uid == userId) || isSuperAdmin();
+      
+      match /configs/{configId} {
+        allow read, write: if (isSignedIn() && request.auth.uid == userId) || isSuperAdmin();
+      }
+      
+      match /signals/{signalId} {
+        allow read, write: if (isSignedIn() && request.auth.uid == userId) || isSuperAdmin();
+      }
+      
+      match /chats/{chatId} {
+        allow read, write: if (isSignedIn() && request.auth.uid == userId) || isSuperAdmin();
+      }
+
+      match /funded_accounts/{accountId} {
+        allow read, write: if (isSignedIn() && request.auth.uid == userId) || isSuperAdmin();
+      }
+    }
+  }
+}

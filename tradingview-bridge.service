@@ -1,0 +1,19 @@
+[Unit]
+Description=TradingView to MT5 Webhook Bridge Service
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/var/www/tradingview-bridge
+ExecStart=/usr/bin/node /var/www/tradingview-bridge/dist/server.cjs
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+Environment=PORT=3000
+KillSignal=SIGINT
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

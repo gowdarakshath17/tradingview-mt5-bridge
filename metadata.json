@@ -1,0 +1,6 @@
+{
+  "name": "TradingView to MT5 Bridge",
+  "description": "A full-stack TradingView webhook receiver and MT5 automated trade execution bridge with a real-time signal log, webhook simulator, MQL5 EA generator, Python bridge, and dynamic position size calculator.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
