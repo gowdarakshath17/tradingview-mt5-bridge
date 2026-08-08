@@ -29,11 +29,16 @@ input int      InpMagicNumber    = 881122;
 string gLastSignalId = "";
 
 int OnInit() {
+   string serverUrl = InpServerURL;
+   StringTrimLeft(serverUrl);
+   StringTrimRight(serverUrl);
+   StringReplace(serverUrl, "localhost", "127.0.0.1");
+
    EventSetTimer(InpPollInterval);
    trade.SetExpertMagicNumber(InpMagicNumber);
    Print("==================================================");
    Print("🚀 TradingView-To-MT5 EA Initialized Successfully!");
-   Print("🔗 Polling Server: ", InpServerURL);
+   Print("🔗 Polling Server: ", serverUrl);
    Print("⏱️ Polling Interval: ", InpPollInterval, " seconds");
    Print("==================================================");
    return(INIT_SUCCEEDED);
@@ -48,6 +53,7 @@ void OnTimer() {
    string serverUrl = InpServerURL;
    StringTrimLeft(serverUrl);
    StringTrimRight(serverUrl);
+   StringReplace(serverUrl, "localhost", "127.0.0.1");
    if(StringFind(serverUrl, "http://") != 0 && StringFind(serverUrl, "https://") != 0) {
       serverUrl = "http://" + serverUrl;
    }
@@ -180,6 +186,7 @@ void NotifyServerSuccess(string signalId, double lot, double price, double balan
    string serverUrl = InpServerURL;
    StringTrimLeft(serverUrl);
    StringTrimRight(serverUrl);
+   StringReplace(serverUrl, "localhost", "127.0.0.1");
    if(StringFind(serverUrl, "http://") != 0 && StringFind(serverUrl, "https://") != 0) {
       serverUrl = "http://" + serverUrl;
    }
