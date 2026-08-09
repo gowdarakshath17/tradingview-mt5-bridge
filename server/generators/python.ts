@@ -11,10 +11,19 @@ Requirements:
 Ensure your MetaTrader 5 Terminal is OPEN and logged into your account.
 """
 
+import sys
 import time
 import requests
 import datetime
 import MetaTrader5 as mt5
+
+# Force UTF-8 encoding for standard output on Windows PM2 / Console
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
 
 # --- Configuration
 BRIDGE_URL = "${hostUrl}"
@@ -57,17 +66,17 @@ print(f"Target Trading Symbol: {SYMBOL}")
 print(f"Risk Profile: {'Dynamic Risk ' + str(RISK_PERCENT) + '%' if USE_DYNAMIC_RISK else 'Fixed Lot ' + str(FIXED_LOT_SIZE)}")
 print("==========================================================\\n")
 
-# Initialize MT5
-if not mt5.initialize():
-    print("MT5 Initialization FAILED. Error code:", mt5.last_error())
-    quit()
+# Initialize MT5 with retry loop
+while not mt5.initialize():
+    print("[WAIT] Waiting for MetaTrader 5 Terminal to open... Error code:", mt5.last_error())
+    time.sleep(5)
 
-print("✔ MetaTrader 5 Terminal connected successfully!")
+print("[OK] MetaTrader 5 Terminal connected successfully!")
 account_info = mt5.account_info()
 if account_info is not None:
     print(f"Account: {account_info.login} | Server: {account_info.server} | Balance: \${account_info.balance:.2f}")
 else:
-    print("❌ Failed to fetch account info. Is MT5 logged in?")
+    print("[ERROR] Failed to fetch account info. Is MT5 logged in?")
 
 # Track processed signals to avoid duplicates
 processed_signal_ids = set()
@@ -78,9 +87,9 @@ try:
     if init_res.status_code == 200:
         for sig in init_res.json():
             processed_signal_ids.add(sig["id"])
-        print(f"✔ Initialized baseline. Skipping {len(processed_signal_ids)} pre-existing pending signals.")
+        print(f"[OK] Initialized baseline. Skipping {len(processed_signal_ids)} pre-existing pending signals.")
 except Exception as e:
-    print("⚠ Could not fetch initial baseline from server. Continuing...", e)
+    print("[WARN] Could not fetch initial baseline from server. Continuing...", e)
 
 
 def calculate_lot_size(balance, symbol):
@@ -90,7 +99,7 @@ def calculate_lot_size(balance, symbol):
     # Get symbol info
     symbol_info = mt5.symbol_info(symbol)
     if symbol_info is None:
-        print(f"❌ Symbol {symbol} not found in MT5 MarketWatch!")
+        print(f"[ERROR] Symbol {symbol} not found in MT5 MarketWatch!")
         return FIXED_LOT_SIZE
         
     # Calculate dollar risk amount
@@ -110,12 +119,12 @@ def calculate_lot_size(balance, symbol):
         max_volume = symbol_info.volume_max
         final_lot = max(min(rounded_lot, max_volume), min_volume)
         
-        print(f"🤖 Dynamic Position Calculator:")
+        print(f"[CALC] Dynamic Position Calculator:")
         print(f"   Balance: \${balance:.2f} | Risk Amount: \${risk_amount:.2f}")
         print(f"   Calculated Lot: {final_lot:.2f} (Broker range: {min_volume} - {max_volume})")
         return round(final_lot, 2)
     else:
-        print("⚠ Could not retrieve broker tick values. Defaulting to fixed lot size.")
+        print("[WARN] Could not retrieve broker tick values. Defaulting to fixed lot size.")
         return FIXED_LOT_SIZE
 
 
@@ -123,21 +132,21 @@ def execute_trade(signal_id, signal_type, signal_sl=None, signal_tp=None):
     # Prepare symbol
     symbol_info = mt5.symbol_info(SYMBOL)
     if symbol_info is None:
-        print(f"❌ Symbol {SYMBOL} not found. Cannot execute trade.")
+        print(f"[ERROR] Symbol {SYMBOL} not found. Cannot execute trade.")
         notify_server_failure(signal_id, f"Symbol {SYMBOL} not found in MT5")
         return
 
     # If symbol not visible, make it visible
     if not symbol_info.visible:
-        print(f"👁 Making symbol {SYMBOL} visible in MarketWatch.")
+        print(f"[INFO] Making symbol {SYMBOL} visible in MarketWatch.")
         if not mt5.symbol_select(SYMBOL, True):
-            print(f"❌ Failed to select {SYMBOL} in MarketWatch.")
+            print(f"[ERROR] Failed to select {SYMBOL} in MarketWatch.")
             notify_server_failure(signal_id, "MarketWatch selection failure")
             return
 
     account = mt5.account_info()
     if account is None:
-        print("❌ Cannot retrieve account balance. MT5 connection lost.")
+        print("[ERROR] Cannot retrieve account balance. MT5 connection lost.")
         notify_server_failure(signal_id, "MT5 Account Info unavailable")
         return
         
@@ -149,7 +158,7 @@ def execute_trade(signal_id, signal_type, signal_sl=None, signal_tp=None):
         risk_amount = account.balance * (RISK_PERCENT / 100.0)
         dynamic_sl_points = risk_amount / (FIXED_LOT_SIZE * CONTRACT_SIZE) if FIXED_LOT_SIZE > 0 and CONTRACT_SIZE > 0 else 10.0
         dynamic_tp_points = dynamic_sl_points * RR_RATIO
-        print(f"📉 Dynamic SL/TP Calculated: SL={dynamic_sl_points:.2f} pts, TP={dynamic_tp_points:.2f} pts")
+        print(f"[SL/TP] Dynamic SL/TP Calculated: SL={dynamic_sl_points:.2f} pts, TP={dynamic_tp_points:.2f} pts")
 
     # Action structures
     point = mt5.symbol_info(SYMBOL).point
@@ -181,33 +190,33 @@ def execute_trade(signal_id, signal_type, signal_sl=None, signal_tp=None):
         "type_filling": mt5.ORDER_FILLING_FOK,  # Standard Fill-or-Kill (can adjust if needed)
     }
 
-    print(f"🚀 Sending Market Order: {signal_type} {lot_size} lots on {SYMBOL} @ {price}. SL: {sl:.2f}, TP: {tp:.2f}")
+    print(f"[ORDER] Sending Market Order: {signal_type} {lot_size} lots on {SYMBOL} @ {price}. SL: {sl:.2f}, TP: {tp:.2f}")
     result = mt5.order_send(request)
     
     if result is None:
-        print("❌ Order Send completely failed. None return.")
+        print("[ERROR] Order Send completely failed. None return.")
         notify_server_failure(signal_id, "Order Send failed completely (MT5 None)")
         return
 
     if result.retcode != mt5.TRADE_RETCODE_DONE:
         # Retry with Return Book (Immediate-or-Cancel / Return) if Fill-or-Kill is not supported by broker
         if result.retcode in [10013, 10014, 10015]:  # invalid volume, price, or details
-            print("🔄 Attempting order execution with ORDER_FILLING_IOC...")
+            print("[RETRY] Attempting order execution with ORDER_FILLING_IOC...")
             request["type_filling"] = mt5.ORDER_FILLING_IOC
             result = mt5.order_send(request)
             
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             # If still fails, try with ORDER_FILLING_RETURN
-            print("🔄 Attempting order execution with ORDER_FILLING_RETURN...")
+            print("[RETRY] Attempting order execution with ORDER_FILLING_RETURN...")
             request["type_filling"] = mt5.ORDER_FILLING_RETURN
             result = mt5.order_send(request)
 
     if result.retcode == mt5.TRADE_RETCODE_DONE:
-        print(f"✔ Trade executed successfully! MT5 Ticket: {result.order}")
+        print(f"[OK] Trade executed successfully! MT5 Ticket: {result.order}")
         notify_server_success(signal_id, lot_size, price, account.balance, result.order)
     else:
         error_msg = f"Failed! Return Code: {result.retcode}. Comment: {result.comment}"
-        print(f"❌ {error_msg}")
+        print(f"[ERROR] {error_msg}")
         notify_server_failure(signal_id, error_msg)
 
 
@@ -224,9 +233,9 @@ def notify_server_success(signal_id, lot, price, balance, ticket):
         }
         res = requests.post(url, json=payload, timeout=5)
         if res.status_code == 200:
-            print("✔ Bridge server logs updated successfully.")
+            print("[OK] Bridge server logs updated successfully.")
     except Exception as e:
-        print("⚠ Failed to update bridge server logs.", e)
+        print("[WARN] Failed to update bridge server logs.", e)
 
 
 def notify_server_failure(signal_id, error_msg):
@@ -239,9 +248,9 @@ def notify_server_failure(signal_id, error_msg):
         }
         res = requests.post(url, json=payload, timeout=5)
         if res.status_code == 200:
-            print("✔ Bridge server error log updated.")
+            print("[OK] Bridge server error log updated.")
     except Exception as e:
-        print("⚠ Failed to update bridge server logs.", e)
+        print("[WARN] Failed to update bridge server logs.", e)
 
 
 def apply_trailing_stop():
@@ -283,7 +292,7 @@ def apply_trailing_stop():
                     }
                     res = mt5.order_send(request)
                     if res is not None and res.retcode == mt5.TRADE_RETCODE_DONE:
-                        print(f"✔ Trailed BUY stop-loss for position {pos.ticket} to {new_sl}")
+                        print(f"[OK] Trailed BUY stop-loss for position {pos.ticket} to {new_sl}")
         elif pos.type == mt5.POSITION_TYPE_SELL:
             if open_price - current_price >= TRAILING_ACTIVATION * point:
                 new_sl = round(current_price + TRAILING_STEP * point, digits)
@@ -296,7 +305,7 @@ def apply_trailing_stop():
                     }
                     res = mt5.order_send(request)
                     if res is not None and res.retcode == mt5.TRADE_RETCODE_DONE:
-                        print(f"✔ Trailed SELL stop-loss for position {pos.ticket} to {new_sl}")
+                        print(f"[OK] Trailed SELL stop-loss for position {pos.ticket} to {new_sl}")
 
 
 def is_market_suspended():
@@ -395,13 +404,13 @@ def close_all_positions(reason="Safety Shutdown"):
         
         result = mt5.order_send(request)
         if result is not None and result.retcode == mt5.TRADE_RETCODE_DONE:
-            print(f"✔ Successfully closed position {pos.ticket} on {pos.symbol}")
+            print(f"[OK] Successfully closed position {pos.ticket} on {pos.symbol}")
         else:
             # Fallback to IOC filling mode
             request["type_filling"] = mt5.ORDER_FILLING_IOC
             result = mt5.order_send(request)
             if result is not None and result.retcode == mt5.TRADE_RETCODE_DONE:
-                print(f"✔ Successfully closed position {pos.ticket} on {pos.symbol} (IOC)")
+                print(f"[OK] Successfully closed position {pos.ticket} on {pos.symbol} (IOC)")
 
 
 # --- Core Polling Loop
@@ -414,7 +423,7 @@ try:
             if suspended:
                 static_print_timer = getattr(is_market_suspended, "last_print", 0)
                 if time.time() - static_print_timer > 3600:
-                    print(f"💤 VPS is taking a break. Market is suspended: {reason}")
+                    print(f"[PAUSE] VPS is taking a break. Market is suspended: {reason}")
                     is_market_suspended.last_print = time.time()
                 
                 if "Weekend" in reason or "Daily" in reason:
@@ -438,22 +447,23 @@ try:
                 # Apply Trailing Stop for open positions
                 apply_trailing_stop()
             elif res.status_code == 401:
-                print("❌ Server rejected connection! Passphrase might be incorrect.")
+                print("[ERROR] Server rejected connection! Passphrase might be incorrect.")
             else:
-                print(f"⚠ Server returned unexpected status {res.status_code}")
+                print(f"[WARN] Server returned unexpected status {res.status_code}")
                 
         except requests.exceptions.ConnectionError:
-            print("⏳ Server offline or connection error. Retrying in 10s...")
+            print("[WAIT] Server offline or connection error. Retrying in 10s...")
             time.sleep(10)
             continue
         except Exception as e:
-            print("⚠ Unexpected error in polling loop:", e)
+            print("[WARN] Unexpected error in polling loop:", e)
             
         time.sleep(POLL_INTERVAL)
 except KeyboardInterrupt:
-    print("\\n🛑 Bridge terminated by user.")
+    print("\\n[STOP] Bridge terminated by user.")
 finally:
     mt5.shutdown()
     print("MT5 Shutdown completed.")
 `;
 }
+
