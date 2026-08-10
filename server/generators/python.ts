@@ -83,7 +83,7 @@ processed_signal_ids = set()
 
 # Initialize: fetch active pending signals to set baseline
 try:
-    init_res = requests.get(f"{BRIDGE_URL}/api/signals?status=Pending&passphrase={PASSPHRASE}", timeout=5)
+    init_res = requests.get(f"{BRIDGE_URL}/api/signals?status=Pending&passphrase={PASSPHRASE}", timeout=15)
     if init_res.status_code == 200:
         for sig in init_res.json():
             processed_signal_ids.add(sig["id"])
@@ -231,7 +231,7 @@ def notify_server_success(signal_id, lot, price, balance, ticket):
             "balance": balance,
             "ticket": str(ticket)
         }
-        res = requests.post(url, json=payload, timeout=5)
+        res = requests.post(url, json=payload, timeout=10)
         if res.status_code == 200:
             print("[OK] Bridge server logs updated successfully.")
     except Exception as e:
@@ -246,7 +246,7 @@ def notify_server_failure(signal_id, error_msg):
             "status": "Failed",
             "error": error_msg
         }
-        res = requests.post(url, json=payload, timeout=5)
+        res = requests.post(url, json=payload, timeout=10)
         if res.status_code == 200:
             print("[OK] Bridge server error log updated.")
     except Exception as e:
@@ -434,7 +434,7 @@ try:
                 continue
                 
             url = f"{BRIDGE_URL}/api/signals?status=Pending&passphrase={PASSPHRASE}"
-            res = requests.get(url, timeout=5)
+            res = requests.get(url, timeout=15)
             
             if res.status_code == 200:
                 signals = res.json()
@@ -451,6 +451,11 @@ try:
             else:
                 print(f"[WARN] Server returned unexpected status {res.status_code}")
                 
+            time.sleep(2) # Prevent tight CPU/network loop while active
+            
+        except requests.exceptions.Timeout:
+            time.sleep(2)
+            continue
         except requests.exceptions.ConnectionError:
             print("[WAIT] Server offline or connection error. Retrying in 10s...")
             time.sleep(10)

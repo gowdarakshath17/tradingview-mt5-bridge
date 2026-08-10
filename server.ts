@@ -154,6 +154,51 @@ let bridgeConfig: BridgeConfig = {
 // Immediately restore disk state backup if available (power cut recovery)
 loadStateFromDisk();
 
+// Fast in-memory cache for passphrase -> userId mapping to prevent blocking Firestore queries on every 1-second poll
+const passphraseCache = new Map<string, { userId: string | null; expiry: number }>();
+
+async function resolveUserIdByPassphrase(passphrase: string): Promise<string | null> {
+  if (!passphrase) return null;
+  
+  // 1. If passphrase matches local default config directly, return null (local scope)
+  if (passphrase === bridgeConfig.passphrase) {
+    return null;
+  }
+
+  // 2. Check cache
+  const cached = passphraseCache.get(passphrase);
+  if (cached && Date.now() < cached.expiry) {
+    return cached.userId;
+  }
+
+  // 3. Query Firestore if available
+  if (firestore) {
+    try {
+      const configsSnapshot = await firestore.collectionGroup("configs")
+        .where("passphrase", "==", String(passphrase))
+        .limit(1)
+        .get();
+
+      if (!configsSnapshot.empty) {
+        const configDoc = configsSnapshot.docs[0];
+        const docPath = configDoc.ref.path;
+        const pathParts = docPath.split("/");
+        if (pathParts[0] === "users" && pathParts[1]) {
+          const userId = pathParts[1];
+          passphraseCache.set(passphrase, { userId, expiry: Date.now() + 120000 }); // Cache for 2 mins
+          return userId;
+        }
+      }
+    } catch (err) {
+      console.error("Firestore passphrase lookup error:", err);
+    }
+  }
+
+  // Cache null result for 30s
+  passphraseCache.set(passphrase, { userId: null, expiry: Date.now() + 30000 });
+  return null;
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -763,28 +808,17 @@ async function startServer() {
     let matchedUserId: string | null = userId;
 
     // If an external client (like MT5 or Python) is polling via passphrase
-    if (firestore && passphrase) {
-      try {
-        const configsSnapshot = await firestore.collectionGroup("configs")
-          .where("passphrase", "==", String(passphrase))
-          .limit(1)
-          .get();
-
-        if (!configsSnapshot.empty) {
-          const configDoc = configsSnapshot.docs[0];
-          const docPath = configDoc.ref.path;
-          const pathParts = docPath.split("/");
-          if (pathParts[0] === "users" && pathParts[1]) {
-            matchedUserId = pathParts[1];
-          }
-        } else if (passphrase !== bridgeConfig.passphrase) {
+    if (passphrase !== undefined) {
+      const passStr = String(passphrase);
+      if (passStr === bridgeConfig.passphrase) {
+        // Local default passphrase matched instantly in 0ms!
+        matchedUserId = userId || null;
+      } else {
+        matchedUserId = await resolveUserIdByPassphrase(passStr);
+        if (!matchedUserId) {
           return res.status(401).json({ error: "Unauthorized" });
         }
-      } catch (err) {
-        console.error("Firestore passphrase lookup failed in GET /api/signals:", err);
       }
-    } else if (passphrase !== undefined && passphrase !== bridgeConfig.passphrase) {
-      return res.status(401).json({ error: "Unauthorized" });
     }
 
     // Load from Firestore if we identified a valid userId
@@ -822,27 +856,17 @@ async function startServer() {
     let matchedUserId: string | null = null;
     let targetSignal: Signal | null = null;
 
-    if (firestore && passphrase) {
-      try {
-        const configsSnapshot = await firestore.collectionGroup("configs")
-          .where("passphrase", "==", String(passphrase))
-          .limit(1)
-          .get();
-
-        if (!configsSnapshot.empty) {
-          const configDoc = configsSnapshot.docs[0];
-          const docPath = configDoc.ref.path;
-          const pathParts = docPath.split("/");
-          if (pathParts[0] === "users" && pathParts[1]) {
-            matchedUserId = pathParts[1];
-          }
+    if (passphrase) {
+      const passStr = String(passphrase);
+      if (passStr === bridgeConfig.passphrase) {
+        matchedUserId = null;
+      } else {
+        matchedUserId = await resolveUserIdByPassphrase(passStr);
+        if (!matchedUserId) {
+          return res.status(401).json({ error: "Unauthorized" });
         }
-      } catch (err) {
-        console.error("Firestore passphrase lookup failed in execute endpoint:", err);
       }
-    }
-
-    if (passphrase !== bridgeConfig.passphrase && !matchedUserId) {
+    } else {
       return res.status(401).json({ error: "Unauthorized" });
     }
 

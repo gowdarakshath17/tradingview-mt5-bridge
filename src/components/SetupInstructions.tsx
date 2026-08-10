@@ -9,6 +9,7 @@ interface SetupInstructionsProps {
 export default function SetupInstructions({ config }: SetupInstructionsProps) {
   const [activeStepTab, setActiveStepTab] = useState<'tv' | 'mql5' | 'python'>('tv');
   const [copiedPayload, setCopiedPayload] = useState(false);
+  const [copiedPineScript, setCopiedPineScript] = useState(false);
   const [copiedWebhook, setCopiedWebhook] = useState(false);
   const [copiedPathTip, setCopiedPathTip] = useState(false);
   const [installStatus, setInstallStatus] = useState<'idle' | 'installing' | 'success' | 'error'>('idle');
@@ -17,6 +18,64 @@ export default function SetupInstructions({ config }: SetupInstructionsProps) {
   // Derive full URL dynamically
   const appOrigin = typeof window !== 'undefined' ? window.location.origin : 'https://your-app-url.run.app';
   const webhookUrl = `${appOrigin}/api/webhook`;
+
+  const pineScriptCode = `//@version=5
+indicator("MT5 Trailing Stop Bridge", overlay=true, explicit_plot_zorder=true)
+
+// --- Inputs for custom parameters ---
+AtrCoef    = input.float(4.0, title="ATR Coefficient (Sensitivity)")
+AtrLen     = input.int(10, title="ATR Period")
+passphrase = input.string("${config.passphrase}", title="Bridge Passphrase")
+symbolName = input.string("XAUUSD", title="Symbol Name for MT5")
+
+// --- ATR Calculation ---
+atr = ta.atr(AtrLen)
+loss = atr * AtrCoef
+
+// --- Trailing Stop Series ---
+C1 = 0.0
+C1 := bar_index <= 1 ? close : na
+
+if bar_index > 1
+    C1_prev = nz(C1[1], close)
+    t1 = close > C1_prev ? close - loss : close + loss
+    t2 = close < C1_prev and close[1] < C1_prev ? math.min(C1_prev, close + loss) : t1
+    C1 := close > C1_prev and close[1] > C1_prev ? math.max(C1_prev, close - loss) : t2
+
+C1_prev_val = nz(C1[1], close)
+
+// --- Signal Conditions ---
+bullSignal = close > C1 and close[1] <= C1_prev_val
+bearSignal = close < C1 and close[1] >= C1_prev_val
+
+// --- State Tracking (Prevent Consecutive Same-Direction Signals) ---
+var int currentPos = 0 // 1 for Long, -1 for Short
+
+validBullSignal = bullSignal and currentPos != 1
+validBearSignal = bearSignal and currentPos != -1
+
+if validBullSignal
+    currentPos := 1
+if validBearSignal
+    currentPos := -1
+
+// --- Visual Chart Shapes ---
+plotshape(validBullSignal, title="BUY Signal", style=shape.labelup, location=location.belowbar, color=color.rgb(0, 200, 120), text="BUY", textcolor=color.white, size=size.small)
+plotshape(validBearSignal, title="SELL Signal", style=shape.labeldown, location=location.abovebar, color=color.rgb(255, 100, 120), text="SELL", textcolor=color.white, size=size.small)
+
+// --- Plot Trailing Stop Line ---
+plot(C1, title="Trailing Stop (C1)", color=close > C1 ? color.rgb(0, 200, 120) : color.rgb(255, 100, 120), linewidth=2, style=plot.style_stepline)
+
+// --- Webhook Payload Automation ---
+buyPayload  = '{"passphrase": "' + passphrase + '", "type": "BUY", "symbol": "' + symbolName + '", "price": ' + str.tostring(close) + '}'
+sellPayload = '{"passphrase": "' + passphrase + '", "type": "SELL", "symbol": "' + symbolName + '", "price": ' + str.tostring(close) + '}'
+
+// Trigger automated alerts on bar close
+if validBullSignal
+    alert(buyPayload, alert.freq_once_per_bar_close)
+
+if validBearSignal
+    alert(sellPayload, alert.freq_once_per_bar_close)`;
 
   const tradingviewPayload = `{
   "passphrase": "${config.passphrase}",
@@ -264,6 +323,34 @@ export default function SetupInstructions({ config }: SetupInstructionsProps) {
             </p>
             <pre className="bg-black/40 text-emerald-400 p-4 rounded-xl text-xs font-mono overflow-x-auto leading-relaxed border border-slate-200">
               {tradingviewPayload}
+            </pre>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="text-sm font-semibold text-slate-900">4. Clean Pine Script v5 Indicator Code (No EMA Filter)</h4>
+              <button
+                onClick={() => copyToClipboard(pineScriptCode, setCopiedPineScript)}
+                className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1 cursor-pointer transition-colors"
+              >
+                {copiedPineScript ? (
+                  <>
+                    <Check className="w-3.5 h-3.5" />
+                    Copied PineScript!
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5" />
+                    Copy PineScript
+                  </>
+                )}
+              </button>
+            </div>
+            <p className="text-xs text-slate-400 mb-3 leading-relaxed">
+              Clean ATR Trailing Stop Pine Script v5 without EMA filter (triggers signals directly without filtering major buy/sell points):
+            </p>
+            <pre className="bg-black/40 text-blue-300 p-4 rounded-xl text-[11px] font-mono overflow-x-auto leading-relaxed border border-slate-200 max-h-80 overflow-y-auto">
+              {pineScriptCode}
             </pre>
           </div>
         </div>
