@@ -8,7 +8,8 @@ interface SetupInstructionsProps {
 
 export default function SetupInstructions({ config }: SetupInstructionsProps) {
   const [activeStepTab, setActiveStepTab] = useState<'tv' | 'mql5' | 'python'>('tv');
-  const [copiedPayload, setCopiedPayload] = useState(false);
+  const [copiedBuyPayload, setCopiedBuyPayload] = useState(false);
+  const [copiedSellPayload, setCopiedSellPayload] = useState(false);
   const [copiedPineScript, setCopiedPineScript] = useState(false);
   const [copiedWebhook, setCopiedWebhook] = useState(false);
   const [copiedPathTip, setCopiedPathTip] = useState(false);
@@ -75,11 +76,22 @@ if validBullSignal
     alert(buyPayload, alert.freq_once_per_bar_close)
 
 if validBearSignal
-    alert(sellPayload, alert.freq_once_per_bar_close)`;
+    alert(sellPayload, alert.freq_once_per_bar_close)
 
-  const tradingviewPayload = `{
+// Dedicated Alert Conditions for TradingView UI Dropdown
+alertcondition(validBullSignal, title="BUY Signal Alert", message='{"passphrase": "' + passphrase + '", "type": "BUY", "symbol": "' + symbolName + '", "price": "{{close}}"}')
+alertcondition(validBearSignal, title="SELL Signal Alert", message='{"passphrase": "' + passphrase + '", "type": "SELL", "symbol": "' + symbolName + '", "price": "{{close}}"}')`;
+
+  const tradingviewBuyPayload = `{
   "passphrase": "${config.passphrase}",
   "type": "BUY",
+  "symbol": "XAUUSD",
+  "price": "{{close}}"
+}`;
+
+  const tradingviewSellPayload = `{
+  "passphrase": "${config.passphrase}",
+  "type": "SELL",
   "symbol": "XAUUSD",
   "price": "{{close}}"
 }`;
@@ -290,40 +302,102 @@ if validBearSignal
           </div>
 
           <div>
-            <h4 className="text-sm font-semibold text-slate-900 mb-2.5">2. Setting Up notifications</h4>
-            <ul className="list-disc pl-5 text-xs text-slate-400 space-y-2 leading-relaxed">
+            <h4 className="text-sm font-semibold text-slate-900 mb-2.5">2. Setting Up Notifications</h4>
+            <ul className="list-disc pl-5 text-xs text-slate-400 space-y-2 leading-relaxed mb-3">
               <li>Navigate to the <strong className="text-slate-700">Notifications</strong> tab in the alert dialog.</li>
               <li>Check the box for <strong className="text-slate-700">Webhook URL</strong>.</li>
               <li>Paste your unique public bridge URL: <code className="bg-black/20 border border-slate-200 px-1.5 py-0.5 rounded font-mono text-blue-600 select-all">{webhookUrl}</code>.</li>
             </ul>
+
+            <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-3 text-xs text-amber-200 space-y-2">
+              <div className="flex items-center gap-1.5 font-semibold text-amber-400">
+                <Info className="w-4 h-4 text-amber-400 shrink-0" />
+                <span>Important TradingView Port 80 / 443 Requirement:</span>
+              </div>
+              <p className="text-slate-300 text-[11px] leading-relaxed">
+                TradingView strictly forbids custom ports like <code className="text-amber-300">:3000</code> in HTTP webhook URLs (it errors saying <em>"for http only port 80 is supported"</em>).
+              </p>
+              <p className="text-slate-300 text-[11px] leading-relaxed">
+                If pointing TradingView directly to your VPS IP address (<code className="text-amber-300">http://YOUR_VPS_IP/api/webhook</code>), forward Port 80 to Port 3000 on your VPS using Windows PowerShell (Run as Administrator):
+              </p>
+              <pre className="bg-black/50 text-amber-300 p-2.5 rounded-lg text-[10px] font-mono overflow-x-auto select-all leading-relaxed">
+netsh interface portproxy add v4tov4 listenport=80 listenaddress=0.0.0.0 connectport=3000 connectaddress=127.0.0.1
+New-NetFirewallRule -DisplayName "TradingView Port 80" -Direction Inbound -LocalPort 80 -Protocol TCP -Action Allow
+              </pre>
+            </div>
           </div>
 
           <div>
-            <div className="flex items-center justify-between mb-2">
-              <h4 className="text-sm font-semibold text-slate-900">3. Setting the Webhook Message Payload</h4>
-              <button
-                onClick={() => copyToClipboard(tradingviewPayload, setCopiedPayload)}
-                className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1 cursor-pointer transition-colors"
-              >
-                {copiedPayload ? (
-                  <>
-                    <Check className="w-3.5 h-3.5" />
-                    Copied!
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-3.5 h-3.5" />
-                    Copy JSON
-                  </>
-                )}
-              </button>
-            </div>
-            <p className="text-xs text-slate-400 mb-3 leading-relaxed">
-              In the <strong className="text-slate-700">Settings</strong> tab, paste the following JSON payload exactly inside the <strong className="text-slate-700">Message</strong> box. Replace <code className="font-mono bg-black/20 border border-slate-200 px-1 rounded text-blue-600">"BUY"</code> with <code className="font-mono bg-black/20 border border-slate-200 px-1 rounded text-blue-600">"SELL"</code> when setting up the Sell signal alert.
+            <h4 className="text-sm font-semibold text-slate-900 mb-2.5">3. Setting the Webhook Message Payload (Create 2 Separate Alerts)</h4>
+            <p className="text-xs text-slate-400 mb-4 leading-relaxed">
+              Create <strong>Alert #1 for BUY</strong> and <strong>Alert #2 for SELL</strong> by selecting the corresponding condition from the dropdown. Paste the exact JSON payload below into the <strong className="text-slate-700">Message</strong> box for each alert:
             </p>
-            <pre className="bg-black/40 text-emerald-400 p-4 rounded-xl text-xs font-mono overflow-x-auto leading-relaxed border border-slate-200">
-              {tradingviewPayload}
-            </pre>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* BUY Alert Card */}
+              <div className="bg-emerald-950/20 border border-emerald-500/20 rounded-xl p-4 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-emerald-400 uppercase font-mono tracking-wide flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                    Alert #1: BUY Signal
+                  </span>
+                  <button
+                    onClick={() => copyToClipboard(tradingviewBuyPayload, setCopiedBuyPayload)}
+                    className="text-xs text-emerald-400 hover:text-emerald-300 flex items-center gap-1 cursor-pointer transition-colors bg-emerald-500/10 px-2 py-1 rounded border border-emerald-500/20"
+                  >
+                    {copiedBuyPayload ? (
+                      <>
+                        <Check className="w-3.5 h-3.5" />
+                        Copied BUY JSON!
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5" />
+                        Copy BUY JSON
+                      </>
+                    )}
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-400">
+                  Condition: <strong className="text-slate-300">MT5 Trailing Stop Bridge</strong> &rarr; <strong className="text-emerald-400">BUY Signal</strong>
+                </p>
+                <pre className="bg-black/60 text-emerald-400 p-3 rounded-lg text-xs font-mono overflow-x-auto leading-relaxed border border-emerald-500/20 select-all">
+                  {tradingviewBuyPayload}
+                </pre>
+              </div>
+
+              {/* SELL Alert Card */}
+              <div className="bg-rose-950/20 border border-rose-500/20 rounded-xl p-4 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-rose-400 uppercase font-mono tracking-wide flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-rose-400 animate-pulse"></span>
+                    Alert #2: SELL Signal
+                  </span>
+                  <button
+                    onClick={() => copyToClipboard(tradingviewSellPayload, setCopiedSellPayload)}
+                    className="text-xs text-rose-400 hover:text-rose-300 flex items-center gap-1 cursor-pointer transition-colors bg-rose-500/10 px-2 py-1 rounded border border-rose-500/20"
+                  >
+                    {copiedSellPayload ? (
+                      <>
+                        <Check className="w-3.5 h-3.5" />
+                        Copied SELL JSON!
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5" />
+                        Copy SELL JSON
+                      </>
+                    )}
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-400">
+                  Condition: <strong className="text-slate-300">MT5 Trailing Stop Bridge</strong> &rarr; <strong className="text-rose-400">SELL Signal</strong>
+                </p>
+                <pre className="bg-black/60 text-rose-400 p-3 rounded-lg text-xs font-mono overflow-x-auto leading-relaxed border border-rose-500/20 select-all">
+                  {tradingviewSellPayload}
+                </pre>
+              </div>
+            </div>
           </div>
 
           <div>

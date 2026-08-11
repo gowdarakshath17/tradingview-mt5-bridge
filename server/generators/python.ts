@@ -415,12 +415,14 @@ def close_all_positions(reason="Safety Shutdown"):
 
 # --- Core Polling Loop
 print("Core Polling loop started. Listening for incoming signals...")
+was_suspended = False
 try:
     while True:
         try:
             # Check if market is closed or holiday active
             suspended, reason = is_market_suspended()
             if suspended:
+                was_suspended = True
                 static_print_timer = getattr(is_market_suspended, "last_print", 0)
                 if time.time() - static_print_timer > 3600:
                     print(f"[PAUSE] VPS is taking a break. Market is suspended: {reason}")
@@ -432,6 +434,9 @@ try:
                     
                 time.sleep(60) # Idle loop sleeps longer when market is closed
                 continue
+            elif was_suspended:
+                print("[RESUME] Market active. Resumed live polling for incoming signals...")
+                was_suspended = False
                 
             url = f"{BRIDGE_URL}/api/signals?status=Pending&passphrase={PASSPHRASE}"
             res = requests.get(url, timeout=15)
