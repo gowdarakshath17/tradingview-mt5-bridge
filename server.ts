@@ -543,6 +543,7 @@ async function startServer() {
   // API: Receive signals from TradingView or Simulator
   // Webhooks from TradingView are sent to this endpoint
   app.post("/api/webhook", async (req, res) => {
+    console.log(`[WEBHOOK ENTRY] Incoming request from IP: ${req.ip} | X-Forwarded-For: ${req.headers["x-forwarded-for"]}`);
     const { passphrase, type, type_string, action, signal, symbol, price } = req.body;
 
     // Support both direct payloads and custom alert messages
