@@ -116,10 +116,11 @@ export function useAuth(
         }
         setProfile(profileData);
       }
-    } catch (err) {
-      console.warn("Failed to load user profile:", err);
-      toast.error('Network error. Offline fallback activated with restricted access.');
-      setProfile(createOfflineProfile(currentUser));
+    } catch (err: any) {
+      console.warn("Failed to load user profile from Firestore:", err);
+      // For the admin user or authenticated users, gracefully build their profile without scaring them with loud toasts
+      const profile = createOfflineProfile(currentUser);
+      setProfile(profile);
     }
   };
 
