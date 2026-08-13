@@ -115,8 +115,9 @@ let signals: Signal[] = [];
 let bridgeConfig: BridgeConfig = {
   passphrase: "gold_bridge_secret",
   riskPercent: 1.0, // 1%
-  stopLossPoints: 10.0, // $10.00 gold movement
-  takeProfitPoints: 20.0, // $20.00 gold movement
+  stopLossPoints: 10.0, // $10.00 gold movement (1:1 Risk)
+  takeProfitPoints: 20.0, // $20.00 gold movement (1:2 R:R Target)
+  riskRewardRatio: 2.0,
   contractSize: 100, // standard gold contract size
   lotSizingMode: "DynamicRisk",
   fixedLotSize: 0.1,
@@ -124,7 +125,7 @@ let bridgeConfig: BridgeConfig = {
   routeMode: 'All',
   maxDailyDrawdownPct: 5,
   maxTotalDrawdownPct: 10,
-  maxOpenTrades: 5,
+  maxOpenTrades: 1, // Fixed to 1 position max
   consecutiveLossLimit: 3,
   pauseAfterConsecutiveLossesMins: 60,
   equityProtectionEnabled: false,
@@ -136,10 +137,10 @@ let bridgeConfig: BridgeConfig = {
   slTpCalculation: 'DistanceBased',
   maxAllowedSlippagePoints: 50,
   holdTillCounterDirection: false,
-  dynamicTrailingStop: false,
+  dynamicTrailingStop: true,
   trailingActivationPoints: 10.0,
   trailingStepPoints: 2.0,
-  profitLockPercentage: 50,
+  profitLockPercentage: 50, // 50% partial close at 1:1
   weekendShutdownEnabled: true,
   shutdownMinutesBeforeClose: 15,
   holidayFilterEnabled: true,

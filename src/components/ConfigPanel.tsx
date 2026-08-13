@@ -53,7 +53,7 @@ export default function ConfigPanel({ config, onUpdateConfig }: ConfigPanelProps
   // Advanced Risk Management states
   const [maxDailyDrawdownPct, setMaxDailyDrawdownPct] = useState(config.maxDailyDrawdownPct || 5);
   const [maxTotalDrawdownPct, setMaxTotalDrawdownPct] = useState(config.maxTotalDrawdownPct || 10);
-  const [maxOpenTrades, setMaxOpenTrades] = useState(config.maxOpenTrades || 5);
+  const [maxOpenTrades, setMaxOpenTrades] = useState(config.maxOpenTrades || 1);
   const [consecutiveLossLimit, setConsecutiveLossLimit] = useState(config.consecutiveLossLimit || 3);
   const [pauseAfterConsecutiveLossesMins, setPauseAfterConsecutiveLossesMins] = useState(config.pauseAfterConsecutiveLossesMins || 60);
   const [equityProtectionEnabled, setEquityProtectionEnabled] = useState(config.equityProtectionEnabled || false);
@@ -1163,16 +1163,21 @@ export default function ConfigPanel({ config, onUpdateConfig }: ConfigPanelProps
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 font-mono">
-                Max Open Trades
-              </label>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider font-mono">
+                  Max Open Trades
+                </label>
+                <span className="text-[10px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded font-mono font-bold">Default: 1</span>
+              </div>
               <input
                 type="number"
                 min="1"
-                value={maxOpenTrades}
-                onChange={(e) => setMaxOpenTrades(Number(e.target.value))}
-                className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl text-sm font-mono text-slate-900 focus:outline-none focus:border-slate-200 transition-colors"
+                max="1"
+                readOnly
+                value={1}
+                className="w-full px-4 py-2 bg-slate-100/70 border border-slate-200 rounded-xl text-sm font-mono text-slate-700 cursor-not-allowed"
               />
+              <p className="text-[10px] text-slate-400 mt-1">Locked to 1 position max to strictly enforce single trade execution & counter-reversal.</p>
             </div>
             <div>
               <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 font-mono">

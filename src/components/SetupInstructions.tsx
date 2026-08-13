@@ -68,8 +68,8 @@ plotshape(validBearSignal, title="SELL Signal", style=shape.labeldown, location=
 plot(C1, title="Trailing Stop (C1)", color=close > C1 ? color.rgb(0, 200, 120) : color.rgb(255, 100, 120), linewidth=2, style=plot.style_stepline)
 
 // --- Webhook Payload Automation ---
-buyPayload  = '{"passphrase": "' + passphrase + '", "type": "BUY", "symbol": "' + symbolName + '", "price": ' + str.tostring(close) + '}'
-sellPayload = '{"passphrase": "' + passphrase + '", "type": "SELL", "symbol": "' + symbolName + '", "price": ' + str.tostring(close) + '}'
+buyPayload  = '{"passphrase": "' + passphrase + '", "type": "BUY", "symbol": "' + symbolName + '", "price": "' + str.tostring(close) + '"}'
+sellPayload = '{"passphrase": "' + passphrase + '", "type": "SELL", "symbol": "' + symbolName + '", "price": "' + str.tostring(close) + '"}'
 
 // Trigger automated alerts on bar close
 if validBullSignal
