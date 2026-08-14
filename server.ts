@@ -543,262 +543,255 @@ async function startServer() {
 
   // API: Receive signals from TradingView or Simulator
   // Webhooks from TradingView are sent to this endpoint
-  app.post("/api/webhook", async (req, res) => {
-    console.log(`[WEBHOOK ENTRY] Incoming request from IP: ${req.ip} | X-Forwarded-For: ${req.headers["x-forwarded-for"]}`);
-    const { passphrase, type, type_string, action, signal, symbol, price } = req.body;
+  app.post("/api/webhook", (req, res) => {
+    // 1. Immediately acknowledge the webhook to prevent TradingView 3-second timeout
+    res.status(200).json({ status: "ok", message: "Webhook received and processing in background" });
 
-    // Support both direct payloads and custom alert messages
-    // E.g., TV format: {"passphrase": "...", "type": "BUY", "symbol": "XAUUSD", "price": "{{close}}"}
-    const receivedPassphrase = passphrase || req.query.passphrase || req.headers["x-passphrase"];
-    const sigType = (type || type_string || action || signal || "").toUpperCase();
-    const sigSymbol = symbol || "XAUUSD";
-    const sigPrice = Number(price || req.body.close || req.body.open || 0);
-    const slFromReq = Number(req.body.sl);
-    const tpFromReq = Number(req.body.tp);
-
-    let activeConfig = { ...bridgeConfig };
-    let matchedUserId: string | null = null;
-    const isSimulator = req.body.source === "Simulator";
-
-    // Support extracting custom security token or signature from various headers or URL query parameters
-    const receivedSecret = req.query.secret || 
-                           req.query.token || 
-                           req.query.signature || 
-                           req.headers["x-webhook-secret"] || 
-                           req.headers["x-signature"] || 
-                           req.headers["x-tradingview-signature"];
-
-    // Secure Webhook Signature Verification System (against environment variable secret)
-    const envSecret = process.env.TRADINGVIEW_WEBHOOK_SECRET;
-    if (envSecret && !isSimulator) {
-      // Validate signature/token provided in X-TradingView-Signature header or query parameters
-      const receivedSignature = req.headers["x-tradingview-signature"] || 
-                                req.query.signature || 
-                                req.query.secret || 
-                                req.query.token;
-
-      if (!receivedSignature || receivedSignature !== envSecret) {
-        console.warn(`[WEBHOOK REJECTED] Webhook Signature verification failed. IP: ${req.ip}`);
-        return res.status(401).json({ 
-          error: "Unauthorized. Webhook Signature / Secret verification failed.",
-          help: "Ensure the 'X-TradingView-Signature' header or query parameter 'signature' matches the TRADINGVIEW_WEBHOOK_SECRET configured on the server."
-        });
-      }
-      console.log(`[WEBHOOK] Webhook signature verified successfully against server environment variable.`);
-    }
-
-    if (firestore) {
-      if (receivedPassphrase) {
-        try {
-          const configsSnapshot = await firestore.collectionGroup("configs")
-            .where("passphrase", "==", String(receivedPassphrase))
-            .limit(1)
-            .get();
-
-          if (!configsSnapshot.empty) {
-            const configDoc = configsSnapshot.docs[0];
-            activeConfig = configDoc.data() as BridgeConfig;
-            
-            const docPath = configDoc.ref.path;
-            const pathParts = docPath.split("/");
-            if (pathParts[0] === "users" && pathParts[1]) {
-              matchedUserId = pathParts[1];
-            }
-          }
-        } catch (dbErr) {
-          console.warn("Firestore query failed for webhook config by passphrase.", dbErr);
-        }
-      }
-
-      // If no config found yet, and we received a secure token/secret, search Firestore by webhookSecretToken
-      if (!matchedUserId && receivedSecret) {
-        try {
-          const configsSnapshot = await firestore.collectionGroup("configs")
-            .where("webhookSecretToken", "==", String(receivedSecret))
-            .limit(1)
-            .get();
-
-          if (!configsSnapshot.empty) {
-            const configDoc = configsSnapshot.docs[0];
-            activeConfig = configDoc.data() as BridgeConfig;
-            
-            const docPath = configDoc.ref.path;
-            const pathParts = docPath.split("/");
-            if (pathParts[0] === "users" && pathParts[1]) {
-              matchedUserId = pathParts[1];
-            }
-          }
-        } catch (dbErr) {
-          console.warn("Firestore query failed for webhook config by webhookSecretToken.", dbErr);
-        }
-      }
-    }
-
-    // Advanced Webhook Security: IP Whitelisting verification (Bypassed for Simulator requests)
-    if (activeConfig.ipWhitelistingEnabled && !isSimulator) {
-      const normalizeIp = (ip: string): string => {
-        if (!ip) return "";
-        const trimmed = ip.trim();
-        if (trimmed.startsWith("::ffff:")) {
-          return trimmed.substring(7);
-        }
-        return trimmed;
-      };
-
-      const rawClientIp = (req.headers["x-forwarded-for"] as string || req.ip || req.socket.remoteAddress || "");
-      // If there are multiple IPs in the header, take the first one (the original sender)
-      const clientIpParts = rawClientIp.split(",").map(i => i.trim());
-      const clientIp = normalizeIp(clientIpParts[0]);
-
-      let allowedIpsList: string[] = [];
-      if (activeConfig.allowedIps && activeConfig.allowedIps.trim().length > 0) {
-        allowedIpsList = activeConfig.allowedIps.split(",").map(ip => normalizeIp(ip)).filter(Boolean);
-      } else {
-        // Fallback to official TradingView Server Webhook IPs if none specified but whitelisting is enabled
-        allowedIpsList = [
-          "52.89.214.238", "34.212.75.30", "54.218.53.128", "52.32.178.244", "52.32.178.7",
-          "54.200.183.159", "54.214.153.251", "54.214.153.250", "54.214.153.249",
-          "54.203.111.137", "54.203.111.138", "52.42.226.54", "52.42.226.55"
-        ];
-      }
-
-      const ipMatches = allowedIpsList.includes(clientIp);
-
-      if (!ipMatches) {
-        console.warn(`[WEBHOOK REJECTED] Unauthorized client IP ${clientIp} (raw: ${rawClientIp}) is not in whitelist: ${allowedIpsList.join(", ")}`);
-        return res.status(403).json({ 
-          error: "Forbidden. Webhook originating from unauthorized IP address.", 
-          ip: clientIp,
-          help: "Ensure your alerts are dispatched from TradingView servers or add your IP to Bridge Whitelisting settings."
-        });
-      }
-    }
-
-    // Advanced Webhook Security: Secret Key Verification System
-    let isAuthenticated = false;
-
-    if (matchedUserId) {
-      // Configuration was found in Firestore
-      if (activeConfig.webhookSecretToken) {
-        if (receivedSecret === activeConfig.webhookSecretToken) {
-          isAuthenticated = true;
-        } else {
-          console.warn(`[WEBHOOK REJECTED] Secret token mismatch for user config. Received: ${receivedSecret}, Expected: ${activeConfig.webhookSecretToken}`);
-        }
-      } else if (activeConfig.passphrase) {
-        if (receivedPassphrase === activeConfig.passphrase) {
-          isAuthenticated = true;
-        } else {
-          console.warn(`[WEBHOOK REJECTED] Passphrase mismatch for user config. Received: ${receivedPassphrase}, Expected: ${activeConfig.passphrase}`);
-        }
-      }
-    } else {
-      // Fallback to in-memory/default bridge configuration
-      if (bridgeConfig.webhookSecretToken) {
-        if (receivedSecret === bridgeConfig.webhookSecretToken) {
-          isAuthenticated = true;
-        }
-      } else if (receivedPassphrase === bridgeConfig.passphrase) {
-        isAuthenticated = true;
-      }
-    }
-
-    if (!isAuthenticated) {
-      console.warn(`[WEBHOOK REJECTED] Authentication failed. IP: ${req.ip}`);
-      return res.status(401).json({ error: "Unauthorized. Invalid webhook security token or passphrase verification." });
-    }
-
-    if (sigType !== "BUY" && sigType !== "SELL") {
-      return res.status(400).json({ error: "Invalid signal type. Must be BUY or SELL." });
-    }
-
-    if (isNaN(sigPrice) || sigPrice <= 0) {
-      return res.status(400).json({ error: "Invalid price value." });
-    }
-
-    // Verify Market Status first
-    const marketStatus = checkMarketStatus(new Date(), activeConfig);
-    const shouldFail = !marketStatus.active && !isSimulator; // Simulator bypasses filter to allow testing in UI
-
-    // Calculate initial Stop Loss and Take Profit levels using activeConfig
-    const directionMultiplier = sigType === "BUY" ? 1 : -1;
-    
-    let dynamicSlPts = activeConfig.stopLossPoints;
-    let dynamicTpPts = activeConfig.takeProfitPoints;
-    const mockBalance = 10000;
-    
-    if (activeConfig.lotSizingMode === 'DynamicStopLoss') {
-        const riskAmount = mockBalance * (activeConfig.riskPercent / 100);
-        dynamicSlPts = riskAmount / activeConfig.fixedLotSize;
-        dynamicTpPts = dynamicSlPts * (activeConfig.riskRewardRatio || 2.0);
-    }
-    
-    let sl = !isNaN(slFromReq) ? slFromReq : sigPrice - (dynamicSlPts * directionMultiplier);
-    let tp = !isNaN(tpFromReq) ? tpFromReq : sigPrice + (dynamicTpPts * directionMultiplier);
-
-    // If SL was provided in the payload, override the stopLossPoints constraint dynamically
-    if (!isNaN(slFromReq)) {
-       activeConfig.stopLossPoints = Math.abs(sigPrice - sl);
-    }
-
-    // Dynamic Lot Size estimation using activeConfig
-    let estimatedLot = activeConfig.fixedLotSize;
-    if (activeConfig.lotSizingMode === "DynamicRisk") {
-      const riskAmount = mockBalance * (activeConfig.riskPercent / 100);
-      const riskPerLot = activeConfig.stopLossPoints;
-      estimatedLot = Number((riskAmount / riskPerLot).toFixed(2));
-      if (estimatedLot < 0.01) estimatedLot = 0.01;
-    }
-
-    const newSignal: Signal = {
-      id: "sig_" + Math.random().toString(36).substr(2, 9),
-      timestamp: new Date().toISOString(),
-      type: sigType as "BUY" | "SELL",
-      symbol: sigSymbol,
-      price: sigPrice,
-      sl: Number(sl.toFixed(2)),
-      tp: Number(tp.toFixed(2)),
-      lotSize: estimatedLot,
-      source: isSimulator ? "Simulator" : "TradingView",
-      status: shouldFail ? "Failed" : "Pending",
-      executionDetails: shouldFail ? `Rejected: ${marketStatus.reason}` : undefined
-    };
-
-    signals.unshift(newSignal);
-    
-    // Prevent memory & disk bloat in 24/7 VPS environment
-    if (signals.length > 500) {
-      signals = signals.slice(0, 500);
-    }
-    
-    console.log(`[WEBHOOK RECEIVED] ${sigType} on ${sigSymbol} @ ${sigPrice}. SL: ${newSignal.sl}, TP: ${newSignal.tp}. Status: ${newSignal.status}`);
-
-    // Persist updated signals list to local disk
-    saveStateToDisk();
-
-    // Real-time SSE Broadcast
-    sendSSEEvent("signal_created", newSignal, matchedUserId);
-
-    if (matchedUserId && firestore) {
+    // 2. Process everything else asynchronously
+    (async () => {
       try {
-        await firestore.collection("users").doc(matchedUserId).collection("signals").doc(newSignal.id).set(newSignal);
-        console.log(`[FIREBASE] Saved new webhook signal ${newSignal.id} for user ${matchedUserId}`);
-      } catch (saveErr) {
-        console.error(`[FIREBASE] Failed to save signal ${newSignal.id} to Firestore:`, saveErr);
+        console.log(`[WEBHOOK ENTRY] Incoming request from IP: ${req.ip} | X-Forwarded-For: ${req.headers["x-forwarded-for"]}`);
+        const { passphrase, type, type_string, action, signal, symbol, price } = req.body;
+
+        // Support both direct payloads and custom alert messages
+        // E.g., TV format: {"passphrase": "...", "type": "BUY", "symbol": "XAUUSD", "price": "{{close}}"}
+        const receivedPassphrase = passphrase || req.query.passphrase || req.headers["x-passphrase"];
+        const sigType = (type || type_string || action || signal || "").toUpperCase();
+        const sigSymbol = symbol || "XAUUSD";
+        const sigPrice = Number(price || req.body.close || req.body.open || 0);
+        const slFromReq = Number(req.body.sl);
+        const tpFromReq = Number(req.body.tp);
+
+        let activeConfig = { ...bridgeConfig };
+        let matchedUserId: string | null = null;
+        const isSimulator = req.body.source === "Simulator";
+
+        // Support extracting custom security token or signature from various headers or URL query parameters
+        const receivedSecret = req.query.secret || 
+                               req.query.token || 
+                               req.query.signature || 
+                               req.headers["x-webhook-secret"] || 
+                               req.headers["x-signature"] || 
+                               req.headers["x-tradingview-signature"];
+
+        // Secure Webhook Signature Verification System (against environment variable secret)
+        const envSecret = process.env.TRADINGVIEW_WEBHOOK_SECRET;
+        if (envSecret && !isSimulator) {
+          // Validate signature/token provided in X-TradingView-Signature header or query parameters
+          const receivedSignature = req.headers["x-tradingview-signature"] || 
+                                    req.query.signature || 
+                                    req.query.secret || 
+                                    req.query.token;
+
+          if (!receivedSignature || receivedSignature !== envSecret) {
+            console.warn(`[WEBHOOK REJECTED] Webhook Signature verification failed. IP: ${req.ip}`);
+            return;
+          }
+          console.log(`[WEBHOOK] Webhook signature verified successfully against server environment variable.`);
+        }
+
+        if (firestore) {
+          if (receivedPassphrase) {
+            try {
+              const configsSnapshot = await firestore.collectionGroup("configs")
+                .where("passphrase", "==", String(receivedPassphrase))
+                .limit(1)
+                .get();
+
+              if (!configsSnapshot.empty) {
+                const configDoc = configsSnapshot.docs[0];
+                activeConfig = configDoc.data() as BridgeConfig;
+                
+                const docPath = configDoc.ref.path;
+                const pathParts = docPath.split("/");
+                if (pathParts[0] === "users" && pathParts[1]) {
+                  matchedUserId = pathParts[1];
+                }
+              }
+            } catch (dbErr) {
+              console.warn("Firestore query failed for webhook config by passphrase.", dbErr);
+            }
+          }
+
+          // If no config found yet, and we received a secure token/secret, search Firestore by webhookSecretToken
+          if (!matchedUserId && receivedSecret) {
+            try {
+              const configsSnapshot = await firestore.collectionGroup("configs")
+                .where("webhookSecretToken", "==", String(receivedSecret))
+                .limit(1)
+                .get();
+
+              if (!configsSnapshot.empty) {
+                const configDoc = configsSnapshot.docs[0];
+                activeConfig = configDoc.data() as BridgeConfig;
+                
+                const docPath = configDoc.ref.path;
+                const pathParts = docPath.split("/");
+                if (pathParts[0] === "users" && pathParts[1]) {
+                  matchedUserId = pathParts[1];
+                }
+              }
+            } catch (dbErr) {
+              console.warn("Firestore query failed for webhook config by webhookSecretToken.", dbErr);
+            }
+          }
+        }
+
+        // Advanced Webhook Security: IP Whitelisting verification (Bypassed for Simulator requests)
+        if (activeConfig.ipWhitelistingEnabled && !isSimulator) {
+          const normalizeIp = (ip: string): string => {
+            if (!ip) return "";
+            const trimmed = ip.trim();
+            if (trimmed.startsWith("::ffff:")) {
+              return trimmed.substring(7);
+            }
+            return trimmed;
+          };
+
+          const rawClientIp = (req.headers["x-forwarded-for"] as string || req.ip || req.socket.remoteAddress || "");
+          // If there are multiple IPs in the header, take the first one (the original sender)
+          const clientIpParts = rawClientIp.split(",").map(i => i.trim());
+          const clientIp = normalizeIp(clientIpParts[0]);
+
+          let allowedIpsList: string[] = [];
+          if (activeConfig.allowedIps && activeConfig.allowedIps.trim().length > 0) {
+            allowedIpsList = activeConfig.allowedIps.split(",").map(ip => normalizeIp(ip)).filter(Boolean);
+          } else {
+            // Fallback to official TradingView Server Webhook IPs if none specified but whitelisting is enabled
+            allowedIpsList = [
+              "52.89.214.238", "34.212.75.30", "54.218.53.128", "52.32.178.244", "52.32.178.7",
+              "54.200.183.159", "54.214.153.251", "54.214.153.250", "54.214.153.249",
+              "54.203.111.137", "54.203.111.138", "52.42.226.54", "52.42.226.55"
+            ];
+          }
+
+          const ipMatches = allowedIpsList.includes(clientIp);
+
+          if (!ipMatches) {
+            console.warn(`[WEBHOOK REJECTED] Unauthorized client IP ${clientIp} (raw: ${rawClientIp}) is not in whitelist: ${allowedIpsList.join(", ")}`);
+            return;
+          }
+        }
+
+        // Advanced Webhook Security: Secret Key Verification System
+        let isAuthenticated = false;
+
+        if (matchedUserId) {
+          // Configuration was found in Firestore
+          if (activeConfig.webhookSecretToken) {
+            if (receivedSecret === activeConfig.webhookSecretToken) {
+              isAuthenticated = true;
+            } else {
+              console.warn(`[WEBHOOK REJECTED] Secret token mismatch for user config. Received: ${receivedSecret}, Expected: ${activeConfig.webhookSecretToken}`);
+            }
+          } else if (activeConfig.passphrase) {
+            if (receivedPassphrase === activeConfig.passphrase) {
+              isAuthenticated = true;
+            } else {
+              console.warn(`[WEBHOOK REJECTED] Passphrase mismatch for user config. Received: ${receivedPassphrase}, Expected: ${activeConfig.passphrase}`);
+            }
+          }
+        } else {
+          // Fallback to in-memory/default bridge configuration
+          if (bridgeConfig.webhookSecretToken) {
+            if (receivedSecret === bridgeConfig.webhookSecretToken) {
+              isAuthenticated = true;
+            }
+          } else if (receivedPassphrase === bridgeConfig.passphrase) {
+            isAuthenticated = true;
+          }
+        }
+
+        if (!isAuthenticated) {
+          console.warn(`[WEBHOOK REJECTED] Authentication failed. IP: ${req.ip}`);
+          return;
+        }
+
+        if (sigType !== "BUY" && sigType !== "SELL") {
+          console.warn(`[WEBHOOK ERROR] Invalid signal type: ${sigType}`);
+          return;
+        }
+
+        if (isNaN(sigPrice) || sigPrice <= 0) {
+          console.warn(`[WEBHOOK ERROR] Invalid price value: ${sigPrice}`);
+          return;
+        }
+
+        // Verify Market Status first
+        const marketStatus = checkMarketStatus(new Date(), activeConfig);
+        const shouldFail = !marketStatus.active && !isSimulator; // Simulator bypasses filter to allow testing in UI
+
+        // Calculate initial Stop Loss and Take Profit levels using activeConfig
+        const directionMultiplier = sigType === "BUY" ? 1 : -1;
+        
+        let dynamicSlPts = activeConfig.stopLossPoints;
+        let dynamicTpPts = activeConfig.takeProfitPoints;
+        const mockBalance = 10000;
+        
+        if (activeConfig.lotSizingMode === 'DynamicStopLoss') {
+            const riskAmount = mockBalance * (activeConfig.riskPercent / 100);
+            dynamicSlPts = riskAmount / activeConfig.fixedLotSize;
+            dynamicTpPts = dynamicSlPts * (activeConfig.riskRewardRatio || 2.0);
+        }
+        
+        let sl = !isNaN(slFromReq) ? slFromReq : sigPrice - (dynamicSlPts * directionMultiplier);
+        let tp = !isNaN(tpFromReq) ? tpFromReq : sigPrice + (dynamicTpPts * directionMultiplier);
+
+        // If SL was provided in the payload, override the stopLossPoints constraint dynamically
+        if (!isNaN(slFromReq)) {
+           activeConfig.stopLossPoints = Math.abs(sigPrice - sl);
+        }
+
+        // Dynamic Lot Size estimation using activeConfig
+        let estimatedLot = activeConfig.fixedLotSize;
+        if (activeConfig.lotSizingMode === "DynamicRisk") {
+          const riskAmount = mockBalance * (activeConfig.riskPercent / 100);
+          const riskPerLot = activeConfig.stopLossPoints;
+          estimatedLot = Number((riskAmount / riskPerLot).toFixed(2));
+          if (estimatedLot < 0.01) estimatedLot = 0.01;
+        }
+
+        const newSignal: Signal = {
+          id: "sig_" + Math.random().toString(36).substr(2, 9),
+          timestamp: new Date().toISOString(),
+          type: sigType as "BUY" | "SELL",
+          symbol: sigSymbol,
+          price: sigPrice,
+          sl: Number(sl.toFixed(2)),
+          tp: Number(tp.toFixed(2)),
+          lotSize: estimatedLot,
+          source: isSimulator ? "Simulator" : "TradingView",
+          status: shouldFail ? "Failed" : "Pending",
+          executionDetails: shouldFail ? `Rejected: ${marketStatus.reason}` : undefined
+        };
+
+        signals.unshift(newSignal);
+        
+        // Prevent memory & disk bloat in 24/7 VPS environment
+        if (signals.length > 500) {
+          signals = signals.slice(0, 500);
+        }
+        
+        console.log(`[WEBHOOK RECEIVED] ${sigType} on ${sigSymbol} @ ${sigPrice}. SL: ${newSignal.sl}, TP: ${newSignal.tp}. Status: ${newSignal.status}`);
+
+        // Persist updated signals list to local disk
+        saveStateToDisk();
+
+        // Real-time SSE Broadcast
+        sendSSEEvent("signal_created", newSignal, matchedUserId);
+
+        if (matchedUserId && firestore) {
+          try {
+            await firestore.collection("users").doc(matchedUserId).collection("signals").doc(newSignal.id).set(newSignal);
+            console.log(`[FIREBASE] Saved new webhook signal ${newSignal.id} for user ${matchedUserId}`);
+          } catch (saveErr) {
+            console.error(`[FIREBASE] Failed to save signal ${newSignal.id} to Firestore:`, saveErr);
+          }
+        }
+      } catch (err) {
+        console.error(`[WEBHOOK ERROR] Async processing failed:`, err);
       }
-    }
-
-    if (shouldFail) {
-      return res.status(403).json({
-        error: `Signal rejected: ${marketStatus.reason}`,
-        signal: newSignal
-      });
-    }
-
-    res.status(201).json({
-      message: "Signal received and added to queue",
-      signal: newSignal
-    });
+    })();
   });
 
   // API: Get signals list (used by dashboard and MT5 client for polling)
