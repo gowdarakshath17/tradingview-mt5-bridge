@@ -347,6 +347,48 @@ def execute_trade(signal_id, signal_type, signal_sl=None, signal_tp=None):
         notify_server_failure(signal_id, error_msg)
 
 
+def enforce_gap_protection():
+    """
+    Scans open positions to ensure price hasn't bypassed SL or TP (e.g., due to market gaps).
+    If the broker failed to close it, this forces an immediate market execution close.
+    """
+    positions = mt5.positions_get(symbol=SYMBOL)
+    if positions is None or len(positions) == 0:
+        return
+        
+    for pos in positions:
+        if pos.magic != 881122 and pos.magic != 0:
+            continue
+            
+        tick = mt5.symbol_info_tick(pos.symbol)
+        if tick is None:
+            continue
+            
+        current_price = tick.bid if pos.type == mt5.POSITION_TYPE_BUY else tick.ask
+        
+        breached = False
+        reason_msg = ""
+        
+        if pos.type == mt5.POSITION_TYPE_BUY:
+            if pos.tp > 0 and current_price >= pos.tp:
+                breached = True
+                reason_msg = f"Gapped above TP ({current_price:.2f} >= {pos.tp:.2f})"
+            elif pos.sl > 0 and current_price <= pos.sl:
+                breached = True
+                reason_msg = f"Gapped below SL ({current_price:.2f} <= {pos.sl:.2f})"
+        elif pos.type == mt5.POSITION_TYPE_SELL:
+            if pos.tp > 0 and current_price <= pos.tp:
+                breached = True
+                reason_msg = f"Gapped below TP ({current_price:.2f} <= {pos.tp:.2f})"
+            elif pos.sl > 0 and current_price >= pos.sl:
+                breached = True
+                reason_msg = f"Gapped above SL ({current_price:.2f} >= {pos.sl:.2f})"
+                
+        if breached:
+            print(f"[GAP SCANNER] Position #{pos.ticket} breached limits: {reason_msg}. Forcing market close!")
+            close_single_position(pos, reason="Gap Protection")
+
+
 def apply_trade_management():
     """
     Manages active open positions:
@@ -595,13 +637,13 @@ try:
                     print(f"[PAUSE] Market is suspended: {reason}")
                     is_market_suspended.last_print = time.time()
                 
-                if "Weekend" in reason or "Daily" in reason:
-                    close_all_positions(reason)
-                    
+                # Note: open positions are kept running during shutdown per user request
                 time.sleep(30)
                 continue
             elif was_suspended:
-                print("[RESUME] Market active. Resumed live polling for incoming signals...")
+                print("[RESUME] Market active. Running Gap Scanner on open positions...")
+                enforce_gap_protection()
+                print("[RESUME] Resumed live polling for incoming signals...")
                 was_suspended = False
                 
             # Fetch pending signals from Webhook server
@@ -618,7 +660,8 @@ try:
             elif res.status_code == 401:
                 print("[ERROR] Server rejected connection! Passphrase incorrect.")
                 
-            # Run Position Management: 1:1 Partial Close, Breakeven SL, Dynamic Trailing Stop
+            # Run Position Management: Gap Protection, 1:1 Partial Close, Breakeven SL, Dynamic Trailing Stop
+            enforce_gap_protection()
             apply_trade_management()
             
         except requests.exceptions.Timeout:
