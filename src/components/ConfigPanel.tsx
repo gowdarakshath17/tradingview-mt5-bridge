@@ -51,8 +51,8 @@ export default function ConfigPanel({ config, onUpdateConfig }: ConfigPanelProps
   const [routeMode, setRouteMode] = useState<"All" | "RoundRobin" | "BalanceWeighted">(config.routeMode || 'All');
 
   // Advanced Risk Management states
-  const [maxDailyDrawdownPct, setMaxDailyDrawdownPct] = useState(config.maxDailyDrawdownPct || 5);
-  const [maxTotalDrawdownPct, setMaxTotalDrawdownPct] = useState(config.maxTotalDrawdownPct || 10);
+  const [maxDailyDrawdownPct, setMaxDailyDrawdownPct] = useState(config.maxDailyDrawdownPct || 4);
+  const [maxTotalDrawdownPct, setMaxTotalDrawdownPct] = useState(config.maxTotalDrawdownPct || 8);
   const [maxOpenTrades, setMaxOpenTrades] = useState(config.maxOpenTrades || 1);
   const [consecutiveLossLimit, setConsecutiveLossLimit] = useState(config.consecutiveLossLimit || 3);
   const [pauseAfterConsecutiveLossesMins, setPauseAfterConsecutiveLossesMins] = useState(config.pauseAfterConsecutiveLossesMins || 60);

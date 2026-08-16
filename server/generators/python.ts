@@ -60,8 +60,8 @@ TRAILING_ACTIVATION = ${config.trailingActivationPoints || 10.0} # Price move re
 TRAILING_STEP = ${config.trailingStepPoints || 2.0}             # Trailing distance in price points
 
 # Advanced Account Drawdown Guard Configuration
-MAX_DAILY_DRAWDOWN_PCT = ${config.maxDailyDrawdownPct || 5.0}   # Halt if daily drawdown >= X%
-MAX_TOTAL_DRAWDOWN_PCT = ${config.maxTotalDrawdownPct || 10.0}  # Halt if total drawdown >= X%
+MAX_DAILY_DRAWDOWN_PCT = ${config.maxDailyDrawdownPct || 4.0}   # Halt if daily drawdown >= X%
+MAX_TOTAL_DRAWDOWN_PCT = ${config.maxTotalDrawdownPct || 8.0}  # Halt if total drawdown >= X%
 
 # Weekend & Holiday Safety Configuration
 USE_WEEKEND_SHUTDOWN = ${config.weekendShutdownEnabled ? "True" : "False"}
