@@ -123,8 +123,8 @@ let bridgeConfig: BridgeConfig = {
   fixedLotSize: 0.1,
   routedAccounts: [],
   routeMode: 'All',
-  maxDailyDrawdownPct: 4,
-  maxTotalDrawdownPct: 8,
+  maxDailyDrawdownPct: 5,
+  maxTotalDrawdownPct: 10,
   maxOpenTrades: 1, // Fixed to 1 position max
   consecutiveLossLimit: 3,
   pauseAfterConsecutiveLossesMins: 60,
