@@ -738,6 +738,9 @@ try:
                     time.sleep(30)
                     continue
                     
+                now_utc = datetime.datetime.now(datetime.timezone.utc)
+                daily_start_time = now_utc.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+                
                 today_start_ts = int(daily_start_time)
                 deals = mt5.history_deals_get(today_start_ts, int(time.time()) + 86400)
                 strategy_deals = [d for d in (deals or []) if (d.magic == 881122 or d.magic == 0) and d.entry == 1]
