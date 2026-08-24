@@ -23,7 +23,33 @@ import sys
 import time
 import requests
 import datetime
+import json
+import os
 import MetaTrader5 as mt5
+
+BOT_STATE_FILE = "bot_backtest_state.json"
+
+def load_bot_state():
+    if os.path.exists(BOT_STATE_FILE):
+        try:
+            with open(BOT_STATE_FILE, "r") as f:
+                return json.load(f)
+        except: pass
+    return {
+        "hard_paused": False,
+        "last_loss_limit_day": "",
+        "consecutive_daily_loss_limit_hits": 0,
+        "last_skipped_signal_deal_ticket": 0,
+        "last_trading_day": ""
+    }
+
+def save_bot_state(state):
+    try:
+        with open(BOT_STATE_FILE, "w") as f:
+            json.dump(state, f)
+    except: pass
+
+bot_state = load_bot_state()
 
 # Force UTF-8 encoding for standard output on Windows PM2 / Console
 if hasattr(sys.stdout, 'reconfigure'):
@@ -176,6 +202,21 @@ def calculate_lot_size(balance, symbol):
         return FIXED_LOT_SIZE
 
 
+def get_fill_mode(symbol):
+    """Dynamically determines the correct filling mode supported by the broker for a symbol."""
+    symbol_info = mt5.symbol_info(symbol)
+    if symbol_info is None:
+        return mt5.ORDER_FILLING_FOK
+        
+    if symbol_info.filling_mode & mt5.SYMBOL_FILLING_FOK:
+        return mt5.ORDER_FILLING_FOK
+    elif symbol_info.filling_mode & mt5.SYMBOL_FILLING_IOC:
+        return mt5.ORDER_FILLING_IOC
+    elif symbol_info.filling_mode & mt5.SYMBOL_FILLING_BOC:
+        return mt5.ORDER_FILLING_BOC
+    else:
+        return mt5.ORDER_FILLING_RETURN
+
 def close_single_position(pos, reason="Signal Closure"):
     """Closes a specific MT5 position completely at current market price."""
     tick = mt5.symbol_info_tick(pos.symbol)
@@ -196,7 +237,7 @@ def close_single_position(pos, reason="Signal Closure"):
         "magic": 881122,
         "comment": f"{reason[:20]}",
         "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_FOK,
+        "type_filling": get_fill_mode(pos.symbol),
     }
     
     result = mt5.order_send(request)
@@ -204,11 +245,11 @@ def close_single_position(pos, reason="Signal Closure"):
         print(f"[OK] Closed position #{pos.ticket} on {pos.symbol} ({reason})")
         return True
     else:
-        # Fallback to IOC filling
-        request["type_filling"] = mt5.ORDER_FILLING_IOC
+        # Fallback to RETURN filling (most common fallback for forex/gold)
+        request["type_filling"] = mt5.ORDER_FILLING_RETURN
         result = mt5.order_send(request)
         if result is not None and result.retcode == mt5.TRADE_RETCODE_DONE:
-            print(f"[OK] Closed position #{pos.ticket} on {pos.symbol} (IOC fallback)")
+            print(f"[OK] Closed position #{pos.ticket} on {pos.symbol} (RETURN fallback)")
             return True
             
     print(f"[WARN] Failed to close position #{pos.ticket}. Retcode: {getattr(result, 'retcode', 'None')}")
@@ -294,12 +335,12 @@ def execute_trade(signal_id, signal_type, signal_sl=None, signal_tp=None):
     if signal_type == "BUY":
         price = tick.ask
         sl = signal_sl if signal_sl else price - dynamic_sl_points
-        tp = signal_tp if signal_tp else price + dynamic_tp_points
+        tp = 0.0  # Holding till counter signal
         order_type = mt5.ORDER_TYPE_BUY
     else:
         price = tick.bid
         sl = signal_sl if signal_sl else price + dynamic_sl_points
-        tp = signal_tp if signal_tp else price - dynamic_tp_points
+        tp = 0.0  # Holding till counter signal
         order_type = mt5.ORDER_TYPE_SELL
 
     request = {
@@ -309,15 +350,14 @@ def execute_trade(signal_id, signal_type, signal_sl=None, signal_tp=None):
         "type": order_type,
         "price": price,
         "sl": round(sl, digits),
-        "tp": round(tp, digits),
         "deviation": 30,
         "magic": 881122,
         "comment": f"TV {signal_type} {signal_id[:8]}",
         "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_FOK,
+        "type_filling": get_fill_mode(SYMBOL),
     }
 
-    print(f"[ORDER] Executing {signal_type} {lot_size} lots on {SYMBOL} @ {price:.2f}. Initial SL: {sl:.2f} (1:1 Risk), TP2: {tp:.2f} (1:2 Target)")
+    print(f"[ORDER] Executing {signal_type} {lot_size} lots on {SYMBOL} @ {price:.2f}. Initial SL: {sl:.2f} (Holding till Counter Signal)")
     result = mt5.order_send(request)
     
     if result is None:
@@ -326,16 +366,16 @@ def execute_trade(signal_id, signal_type, signal_sl=None, signal_tp=None):
         return
 
     if result.retcode != mt5.TRADE_RETCODE_DONE:
-        # Retry with IOC filling mode
+        # Fallback 1: Return (Forex Default)
         if result.retcode in [10013, 10014, 10015, 10030]:
-            print("[RETRY] Retrying order execution with ORDER_FILLING_IOC...")
-            request["type_filling"] = mt5.ORDER_FILLING_IOC
-            result = mt5.order_send(request)
-            
-        if result.retcode != mt5.TRADE_RETCODE_DONE:
-            # Fallback to RETURN filling mode
             print("[RETRY] Retrying order execution with ORDER_FILLING_RETURN...")
             request["type_filling"] = mt5.ORDER_FILLING_RETURN
+            result = mt5.order_send(request)
+            
+        # Fallback 2: IOC
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            print("[RETRY] Retrying order execution with ORDER_FILLING_IOC...")
+            request["type_filling"] = mt5.ORDER_FILLING_IOC
             result = mt5.order_send(request)
 
     if result.retcode == mt5.TRADE_RETCODE_DONE:
@@ -391,10 +431,10 @@ def enforce_gap_protection():
 
 def apply_trade_management():
     """
-    Manages active open positions:
-    1. 1:1 Partial Close: When position reaches 1:1 R:R, close 50% lot and move SL to Breakeven.
-    2. Dynamic Trailing Stop: Trailing stop adjustments once profit exceeds threshold.
+    Trade Management disabled for current strategy (Holding till counter signal).
     """
+    return
+
     positions = mt5.positions_get(symbol=SYMBOL)
     if positions is None or len(positions) == 0:
         return
@@ -453,9 +493,14 @@ def apply_trade_management():
                         "magic": 881122,
                         "comment": "TP1 1:1 Partial Close",
                         "type_time": mt5.ORDER_TIME_GTC,
-                        "type_filling": mt5.ORDER_FILLING_FOK,
+                        "type_filling": get_fill_mode(pos.symbol),
                     }
                     res = mt5.order_send(close_req)
+                    
+                    if res is None or res.retcode != mt5.TRADE_RETCODE_DONE:
+                        close_req["type_filling"] = mt5.ORDER_FILLING_RETURN
+                        res = mt5.order_send(close_req)
+                        
                     if res is None or res.retcode != mt5.TRADE_RETCODE_DONE:
                         close_req["type_filling"] = mt5.ORDER_FILLING_IOC
                         res = mt5.order_send(close_req)
@@ -652,10 +697,67 @@ try:
             
             if res.status_code == 200:
                 signals = res.json()
+                
+                # --- BACKTEST STRATEGY RISK RULES EVALUATION ---
+                if bot_state["hard_paused"]:
+                    print("[HARD PAUSE] Account paused due to consecutive days hitting daily loss limits. Intervention required.")
+                    time.sleep(30)
+                    continue
+                    
+                today_start_ts = int(daily_start_time)
+                deals = mt5.history_deals_get(today_start_ts, int(time.time()) + 86400)
+                strategy_deals = [d for d in (deals or []) if (d.magic == 881122 or d.magic == 0) and d.entry == 1]
+                strategy_deals.sort(key=lambda x: x.time)
+                
+                daily_net_pnl = sum(d.profit for d in strategy_deals)
+                total_losing_trades = sum(1 for d in strategy_deals if d.profit < 0)
+                
+                current_day_str = datetime.datetime.fromtimestamp(daily_start_time, tz=datetime.timezone.utc).strftime('%Y-%m-%d')
+                if bot_state["last_trading_day"] != current_day_str:
+                    if bot_state["last_loss_limit_day"] != bot_state["last_trading_day"]:
+                        bot_state["consecutive_daily_loss_limit_hits"] = 0
+                    bot_state["last_trading_day"] = current_day_str
+                    save_bot_state(bot_state)
+
+                if daily_net_pnl <= -150.0 or total_losing_trades >= 3:
+                    if bot_state["last_loss_limit_day"] != current_day_str:
+                        bot_state["last_loss_limit_day"] = current_day_str
+                        bot_state["consecutive_daily_loss_limit_hits"] += 1
+                        save_bot_state(bot_state)
+                        print(f"[RISK GUARD] Daily Limit Hit! (PnL: \${daily_net_pnl:.2f}, Losers: {total_losing_trades})")
+                    
+                    if bot_state["consecutive_daily_loss_limit_hits"] >= 2:
+                        bot_state["hard_paused"] = True
+                        save_bot_state(bot_state)
+                        print("[HARD PAUSE] Account hit daily limit 2 days in a row! Bot paused until manual intervention.")
+                        continue
+                    else:
+                        print("[RISK GUARD] Daily loss limit exceeded. Ignoring all signals for today.")
+                        time.sleep(30)
+                        continue
+
+                skip_next_signal = False
+                if len(strategy_deals) >= 2:
+                    last_deal = strategy_deals[-1]
+                    prev_deal = strategy_deals[-2]
+                    if last_deal.profit < 0 and prev_deal.profit < 0:
+                        if bot_state["last_skipped_signal_deal_ticket"] != last_deal.ticket:
+                            skip_next_signal = True
+                            last_loss_ticket = last_deal.ticket
+                # ----------------------------------------------
+
                 for sig in signals:
                     sig_id = sig["id"]
                     if sig_id not in processed_signal_ids:
                         processed_signal_ids.add(sig_id)
+                        
+                        if skip_next_signal:
+                            print(f"[RISK GUARD] 2 consecutive losses detected! Skipping 3rd signal (ID: {sig_id[:8]}) as per Rule 1.")
+                            bot_state["last_skipped_signal_deal_ticket"] = last_loss_ticket
+                            save_bot_state(bot_state)
+                            skip_next_signal = False
+                            continue
+
                         execute_trade(sig_id, sig["type"])
             elif res.status_code == 401:
                 print("[ERROR] Server rejected connection! Passphrase incorrect.")

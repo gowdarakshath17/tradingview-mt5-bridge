@@ -48,9 +48,9 @@ try {
     }
     auth = getAuth(app);
     if (firebaseConfig && (firebaseConfig as any).firestoreDatabaseId) {
-      db = initializeFirestore(app, { experimentalForceLongPolling: true }, (firebaseConfig as any).firestoreDatabaseId);
+      db = initializeFirestore(app, { experimentalAutoDetectLongPolling: true }, (firebaseConfig as any).firestoreDatabaseId);
     } else {
-      db = initializeFirestore(app, { experimentalForceLongPolling: true });
+      db = initializeFirestore(app, { experimentalAutoDetectLongPolling: true });
     }
     isFirebaseAvailable = true;
     console.log("Firebase initialized successfully with project ID:", firebaseConfig.projectId);
