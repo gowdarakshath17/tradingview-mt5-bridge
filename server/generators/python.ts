@@ -563,6 +563,40 @@ def apply_trade_management():
                             print(f"[DYNAMIC TRAIL] Trailed SELL SL for position #{pos.ticket} to {desired_sl:.2f} (Price: {current_price:.2f})")
 
 
+def report_telemetry():
+    try:
+        account = mt5.account_info()
+        if account is None:
+            return
+            
+        positions = mt5.positions_get(symbol=SYMBOL)
+        open_positions = []
+        if positions:
+            for p in positions:
+                open_positions.append({
+                    "ticket": p.ticket,
+                    "type": "BUY" if p.type == mt5.POSITION_TYPE_BUY else "SELL",
+                    "volume": p.volume,
+                    "price_open": p.price_open,
+                    "sl": p.sl,
+                    "tp": p.tp,
+                    "profit": p.profit
+                })
+
+        url = f"{BRIDGE_URL}/api/telemetry"
+        payload = {
+            "passphrase": PASSPHRASE,
+            "balance": account.balance,
+            "equity": account.equity,
+            "openPositions": open_positions,
+            "server": account.server,
+            "accountName": account.name,
+            "connectionStatus": "Connected"
+        }
+        requests.post(url, json=payload, timeout=5)
+    except:
+        pass
+
 def notify_server_success(signal_id, lot, price, balance, ticket):
     try:
         url = f"{BRIDGE_URL}/api/signals/{signal_id}/execute"
@@ -765,6 +799,9 @@ try:
             # Run Position Management: Gap Protection, 1:1 Partial Close, Breakeven SL, Dynamic Trailing Stop
             enforce_gap_protection()
             apply_trade_management()
+            
+            # Report live state to dashboard
+            report_telemetry()
             
         except requests.exceptions.Timeout:
             pass

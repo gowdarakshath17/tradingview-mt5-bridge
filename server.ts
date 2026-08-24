@@ -111,6 +111,7 @@ function getUserIdFromToken(authHeader?: string): string | null {
 
 // In-memory data store
 let signals: Signal[] = [];
+let mt5Telemetry: any = null;
 
 let bridgeConfig: BridgeConfig = {
   passphrase: "gold_bridge_secret",
@@ -726,10 +727,10 @@ async function startServer() {
         
         let dynamicSlPts = activeConfig.stopLossPoints;
         let dynamicTpPts = activeConfig.takeProfitPoints;
-        const mockBalance = 10000;
+        const dynamicBalance = mt5Telemetry?.balance || 10000;
         
         if (activeConfig.lotSizingMode === 'DynamicStopLoss') {
-            const riskAmount = mockBalance * (activeConfig.riskPercent / 100);
+            const riskAmount = dynamicBalance * (activeConfig.riskPercent / 100);
             dynamicSlPts = riskAmount / activeConfig.fixedLotSize;
             dynamicTpPts = dynamicSlPts * (activeConfig.riskRewardRatio || 2.0);
         }
@@ -745,7 +746,7 @@ async function startServer() {
         // Dynamic Lot Size estimation using activeConfig
         let estimatedLot = activeConfig.fixedLotSize;
         if (activeConfig.lotSizingMode === "DynamicRisk") {
-          const riskAmount = mockBalance * (activeConfig.riskPercent / 100);
+          const riskAmount = dynamicBalance * (activeConfig.riskPercent / 100);
           const riskPerLot = activeConfig.stopLossPoints;
           estimatedLot = Number((riskAmount / riskPerLot).toFixed(2));
           if (estimatedLot < 0.01) estimatedLot = 0.01;
@@ -927,6 +928,32 @@ async function startServer() {
     sendSSEEvent("signal_updated", targetSignal, matchedUserId);
 
     res.json({ message: "Signal execution status updated", signal: targetSignal });
+  });
+
+  // API: MT5 Telemetry Report
+  app.post("/api/telemetry", (req, res) => {
+    const { balance, equity, openPositions, server, accountName, connectionStatus } = req.body;
+    const passphrase = req.body.passphrase || req.query.passphrase || req.headers["x-passphrase"];
+
+    if (passphrase !== bridgeConfig.passphrase) {
+       return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    mt5Telemetry = {
+      balance,
+      equity,
+      openPositions,
+      server,
+      accountName,
+      connectionStatus,
+      lastUpdated: new Date().toISOString()
+    };
+    sendSSEEvent("telemetry_updated", mt5Telemetry);
+    res.json({ message: "Telemetry updated" });
+  });
+
+  app.get("/api/telemetry", (req, res) => {
+    res.json(mt5Telemetry);
   });
 
   // API: Reset / Clear all signals (for testing ease in dashboard)

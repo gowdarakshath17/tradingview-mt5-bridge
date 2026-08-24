@@ -67,6 +67,7 @@ export default function App() {
     executed: 0,
     failed: 0
   });
+  const [telemetry, setTelemetry] = useState<any>(null);
 
   const [theme, setTheme] = useState<'light' | 'midnight'>(() => {
     if (typeof window !== 'undefined') {
@@ -250,6 +251,13 @@ export default function App() {
           failed: statusData.stats.failed
         });
       }
+
+      // Fetch Telemetry
+      const telRes = await fetch('/api/telemetry', { signal });
+      if (telRes.ok) {
+        const telData = await telRes.json();
+        if (telData) setTelemetry(telData);
+      }
     } catch (err: any) {
       if (err.name === 'AbortError') {
         // Ignored: request aborted on component unmount or new poll tick
@@ -334,7 +342,9 @@ export default function App() {
         sse.onmessage = (event) => {
           try {
             const parsed = JSON.parse(event.data);
-            if (
+            if (parsed.type === "telemetry_updated") {
+              setTelemetry(parsed.data);
+            } else if (
               parsed.type === "signal_created" || 
               parsed.type === "signal_updated" || 
               parsed.type === "signals_cleared" || 
@@ -450,15 +460,15 @@ export default function App() {
     
     let dynamicSlPts = config.stopLossPoints;
     let dynamicTpPts = config.takeProfitPoints;
-    const mockBalance = 10000;
+    const simBalance = telemetry?.balance || 10000;
     let estimatedLot = config.fixedLotSize;
     
     if (config.lotSizingMode === 'DynamicStopLoss') {
-        const riskAmount = mockBalance * (config.riskPercent / 100);
+        const riskAmount = simBalance * (config.riskPercent / 100);
         dynamicSlPts = riskAmount / config.fixedLotSize;
         dynamicTpPts = dynamicSlPts * (config.riskRewardRatio || 2.0);
     } else if (config.lotSizingMode === 'DynamicRisk') {
-        const riskAmount = mockBalance * (config.riskPercent / 100);
+        const riskAmount = simBalance * (config.riskPercent / 100);
         estimatedLot = Number((riskAmount / config.stopLossPoints).toFixed(2));
         if (estimatedLot < 0.01) estimatedLot = 0.01;
     }
@@ -888,6 +898,7 @@ export default function App() {
                 config={config}
                 systemStatus={systemStatus}
                 avgSlippage={avgSlippage}
+                telemetry={telemetry}
               />
             )}
 

@@ -16,9 +16,19 @@ export default function PositionCalculator({ config, user }: PositionCalculatorP
   
   useEffect(() => {
     const fetchFundedBalance = async () => {
-      if (!user) return;
       setIsFetchingBalance(true);
       try {
+        // Try getting live MT5 telemetry first!
+        const telRes = await fetch('/api/telemetry');
+        if (telRes.ok) {
+           const telData = await telRes.json();
+           if (telData && telData.balance) {
+              setBalance(telData.balance);
+              return;
+           }
+        }
+      
+        if (!user) return;
         const collRef = collection(db, `users/${user.uid}/funded_accounts`);
         const snapshot = await getDocs(collRef);
         if (!snapshot.empty) {

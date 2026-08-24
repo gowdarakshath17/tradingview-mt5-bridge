@@ -26,9 +26,10 @@ interface BentoGridProps {
     failed: number;
   };
   avgSlippage: string;
+  telemetry?: any;
 }
 
-export default function BentoGrid({ signals, config, systemStatus, avgSlippage }: BentoGridProps) {
+export default function BentoGrid({ signals, config, systemStatus, avgSlippage, telemetry }: BentoGridProps) {
   const stats = useMemo(() => getTradingStats(signals), [signals]);
   const [copied, setCopied] = React.useState(false);
 
@@ -231,7 +232,7 @@ export default function BentoGrid({ signals, config, systemStatus, avgSlippage }
         </div>
       </motion.div>
 
-      {/* CARD 4: Queue backlog */}
+      {/* CARD 4: MT5 Telemetry */}
       <motion.div 
         whileHover={{ y: -4, scale: 1.01 }}
         transition={{ type: "spring", stiffness: 350, damping: 25 }}
@@ -240,16 +241,16 @@ export default function BentoGrid({ signals, config, systemStatus, avgSlippage }
         <div className="flex justify-between items-start">
           <div className="space-y-1">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest font-display block">
-              Terminal Queue
+              MT5 Live Balance
             </span>
-            <h3 className="text-2xl font-bold font-mono text-blue-600 mt-1">
-              {systemStatus.pending}
+            <h3 className="text-2xl font-bold font-mono text-slate-900 mt-1">
+              ${telemetry ? (telemetry.balance?.toFixed(2)) : "---"}
             </h3>
             <p className="text-[10px] text-slate-400">
-              Awaiting MT5 Terminal
+              Equity: ${telemetry ? (telemetry.equity?.toFixed(2)) : "---"}
             </p>
           </div>
-          <div className="p-2.5 bg-slate-50 text-blue-600 rounded-xl border border-slate-100 shadow-sm">
+          <div className={`p-2.5 rounded-xl border shadow-sm ${telemetry?.connectionStatus === 'Connected' ? 'bg-emerald-50 text-emerald-500 border-emerald-100' : 'bg-slate-50 text-slate-400 border-slate-100'}`}>
             <Cpu className="w-4 h-4" />
           </div>
         </div>
@@ -257,10 +258,10 @@ export default function BentoGrid({ signals, config, systemStatus, avgSlippage }
         <div className="flex items-center justify-between text-[10px] font-mono text-slate-500 pt-2 border-t border-slate-50">
           <span className="flex items-center gap-1">
             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
-            Exec: {systemStatus.executed}
+            Open Trades: {telemetry ? telemetry.openPositions?.length || 0 : 0}
           </span>
-          <span className="flex items-center gap-1 text-slate-400">
-            • Fail: {systemStatus.failed}
+          <span className="flex items-center gap-1 text-slate-400 truncate max-w-[80px]" title={telemetry?.server || 'N/A'}>
+             {telemetry ? telemetry.server?.split('-')[0] : 'No Data'}
           </span>
         </div>
       </motion.div>
