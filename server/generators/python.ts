@@ -107,7 +107,7 @@ print("==========================================================")
 print(f"Bridge URL: {BRIDGE_URL}")
 print(f"Target Trading Symbol: {SYMBOL}")
 print(f"Risk Profile: {'Dynamic Risk ' + str(RISK_PERCENT) + '%' if USE_DYNAMIC_RISK else 'Fixed Lot ' + str(FIXED_LOT_SIZE)}")
-print(f"Trade Rules: 1:1 Partial Close (50%) -> BE -> 1:2 TP2 Target")
+print(f"Trade Rules: Hold position until Counter Signal or SL")
 print(f"Counter Signals: Instant Reversal (Close Opposite -> Open New)")
 print(f"Max Open Positions: {MAX_OPEN_TRADES}")
 print(f"Account Protection: Max Daily DD: {MAX_DAILY_DRAWDOWN_PCT}%, Max Total DD: {MAX_TOTAL_DRAWDOWN_PCT}%")
@@ -208,14 +208,12 @@ def get_fill_mode(symbol):
     if symbol_info is None:
         return mt5.ORDER_FILLING_FOK
         
-    if symbol_info.filling_mode & mt5.SYMBOL_FILLING_FOK:
+    if symbol_info.filling_mode & 1:
         return mt5.ORDER_FILLING_FOK
-    elif symbol_info.filling_mode & mt5.SYMBOL_FILLING_IOC:
+    elif symbol_info.filling_mode & 2:
         return mt5.ORDER_FILLING_IOC
-    elif symbol_info.filling_mode & mt5.SYMBOL_FILLING_BOC:
-        return mt5.ORDER_FILLING_BOC
     else:
-        return mt5.ORDER_FILLING_RETURN
+        return getattr(mt5, 'ORDER_FILLING_RETURN', mt5.ORDER_FILLING_FOK)
 
 def close_single_position(pos, reason="Signal Closure"):
     """Closes a specific MT5 position completely at current market price."""
