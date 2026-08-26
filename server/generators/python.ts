@@ -206,6 +206,7 @@ def get_fill_mode(symbol):
     """Dynamically determines the correct filling mode supported by the broker for a symbol."""
     symbol_info = mt5.symbol_info(symbol)
     if symbol_info is None:
+        # Default fallback if symbol info cannot be retrieved
         return mt5.ORDER_FILLING_FOK
         
     if symbol_info.filling_mode & 1:
