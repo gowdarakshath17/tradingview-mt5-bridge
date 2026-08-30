@@ -732,11 +732,6 @@ try:
                 signals = res.json()
                 
                 # --- BACKTEST STRATEGY RISK RULES EVALUATION ---
-                if bot_state["hard_paused"]:
-                    print("[HARD PAUSE] Account paused due to consecutive days hitting daily loss limits. Intervention required.")
-                    time.sleep(30)
-                    continue
-                    
                 now_utc = datetime.datetime.now(datetime.timezone.utc)
                 daily_start_time = now_utc.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
                 
@@ -745,41 +740,39 @@ try:
                 strategy_deals = [d for d in (deals or []) if (d.magic == 881122 or d.magic == 0) and d.entry == 1]
                 strategy_deals.sort(key=lambda x: x.time)
                 
+                def is_full_loss(d):
+                    # A full loss is negative profit AND triggered by Stop Loss (reason == 4 or comment contains 'sl')
+                    return d.profit < 0 and (getattr(d, 'reason', 0) == 4 or 'sl' in getattr(d, 'comment', '').lower())
+                
                 daily_net_pnl = sum(d.profit for d in strategy_deals)
-                total_losing_trades = sum(1 for d in strategy_deals if d.profit < 0)
+                total_full_losing_trades = sum(1 for d in strategy_deals if is_full_loss(d))
                 
                 current_day_str = datetime.datetime.fromtimestamp(daily_start_time, tz=datetime.timezone.utc).strftime('%Y-%m-%d')
                 if bot_state["last_trading_day"] != current_day_str:
-                    if bot_state["last_loss_limit_day"] != bot_state["last_trading_day"]:
-                        bot_state["consecutive_daily_loss_limit_hits"] = 0
                     bot_state["last_trading_day"] = current_day_str
                     save_bot_state(bot_state)
 
-                if daily_net_pnl <= -150.0 or total_losing_trades >= 3:
-                    if bot_state["last_loss_limit_day"] != current_day_str:
+                if total_full_losing_trades >= 4:
+                    if bot_state.get("last_loss_limit_day") != current_day_str:
                         bot_state["last_loss_limit_day"] = current_day_str
-                        bot_state["consecutive_daily_loss_limit_hits"] += 1
                         save_bot_state(bot_state)
-                        print(f"[RISK GUARD] Daily Limit Hit! (PnL: \${daily_net_pnl:.2f}, Losers: {total_losing_trades})")
+                        print(f"[RISK GUARD] Daily Limit Hit! (Full SL Losers: {total_full_losing_trades})")
                     
-                    if bot_state["consecutive_daily_loss_limit_hits"] >= 2:
-                        bot_state["hard_paused"] = True
-                        save_bot_state(bot_state)
-                        print("[HARD PAUSE] Account hit daily limit 2 days in a row! Bot paused until manual intervention.")
-                        continue
-                    else:
-                        print("[RISK GUARD] Daily loss limit exceeded. Ignoring all signals for today.")
-                        time.sleep(30)
-                        continue
+                    print("[RISK GUARD] Daily loss limit exceeded. Ignoring all signals for today.")
+                    time.sleep(30)
+                    continue
 
                 skip_next_signal = False
-                if len(strategy_deals) >= 2:
-                    last_deal = strategy_deals[-1]
-                    prev_deal = strategy_deals[-2]
-                    if last_deal.profit < 0 and prev_deal.profit < 0:
-                        if bot_state["last_skipped_signal_deal_ticket"] != last_deal.ticket:
-                            skip_next_signal = True
-                            last_loss_ticket = last_deal.ticket
+                consecutive_full_losses = 0
+                for d in reversed(strategy_deals):
+                    if is_full_loss(d):
+                        consecutive_full_losses += 1
+                    else:
+                        break
+                
+                if consecutive_full_losses == 2:
+                    if bot_state.get("last_skipped_deal_count") != len(strategy_deals):
+                        skip_next_signal = True
                 # ----------------------------------------------
 
                 for sig in signals:
@@ -788,8 +781,8 @@ try:
                         processed_signal_ids.add(sig_id)
                         
                         if skip_next_signal:
-                            print(f"[RISK GUARD] 2 consecutive losses detected! Skipping 3rd signal (ID: {sig_id[:8]}) as per Rule 1.")
-                            bot_state["last_skipped_signal_deal_ticket"] = last_loss_ticket
+                            print(f"[RISK GUARD] 2 consecutive full losses detected! Skipping 3rd signal (ID: {sig_id[:8]}) as per Rule 1.")
+                            bot_state["last_skipped_deal_count"] = len(strategy_deals)
                             save_bot_state(bot_state)
                             skip_next_signal = False
                             continue
